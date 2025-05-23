@@ -5,10 +5,28 @@ import Scene from './components/Scene/Scene'
 import ThemeToggle from './components/ThemeToggle/ThemeToggle'
 import { ThemeProvider, useTheme } from './contexts/ThemeContext'
 import * as THREE from 'three'
+import Stats from 'stats.js'
+import { useEffect, useRef } from 'react'
 import './App.css'
 
 function CanvasContent() {
     const { theme } = useTheme()
+    const statsRef = useRef()
+
+    useEffect(() => {
+        // Initialize Stats
+        const stats = new Stats()
+        stats.showPanel(0) // 0: fps, 1: ms, 2: mb, 3+: custom
+        stats.dom.style.position = 'absolute'
+        stats.dom.style.left = '10px'
+        stats.dom.style.top = '10px'
+        document.body.appendChild(stats.dom)
+        statsRef.current = stats
+
+        return () => {
+            document.body.removeChild(stats.dom)
+        }
+    }, [])
 
     return (
         <div style={{ width: '100%', height: '100%', background: theme.background }}>
@@ -22,11 +40,16 @@ function CanvasContent() {
                 gl={{
                     antialias: true,
                     alpha: true,
-                    toneMapping: THREE.ACESFilmicToneMapping
+                    toneMapping: THREE.ACESFilmicToneMapping,
+                    powerPreference: "high-performance"
                 }}
                 style={{ cursor: 'pointer' }}
+                frameloop="always"
+                onCreated={({ gl }) => {
+                    gl.setPixelRatio(Math.min(window.devicePixelRatio, 2))
+                }}
             >
-                <Scene />
+                <Scene stats={statsRef} />
                 <OrbitControls enableZoom={false} enablePan={false} />
                 <EffectComposer>
                     <Bloom

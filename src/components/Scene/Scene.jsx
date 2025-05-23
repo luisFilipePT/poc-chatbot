@@ -1,8 +1,16 @@
 import { useState } from 'react'
+import { useFrame } from '@react-three/fiber'
 import ParticleSystem from '../ParticleSystem/ParticleSystem'
 
-function Scene() {
+function Scene({ stats }) {
     const [targetShape, setTargetShape] = useState(null)
+
+    // Update stats on each frame
+    useFrame(() => {
+        if (stats?.current) {
+            stats.current.update()
+        }
+    })
 
     const handleClick = (event) => {
         // Set the target shape with the click position
