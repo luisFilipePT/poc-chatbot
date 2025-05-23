@@ -8,11 +8,12 @@ import {particleVertexShader, particleFragmentShader} from './particleShader'
 
 
 function ParticleSystem({onShapeForm, targetShape}) {
-    const [clickPosition, setClickPosition] = useState(null)
     const [targetSizes, setTargetSizes] = useState(null)
     const [targetPositions, setTargetPositions] = useState(null)
     const [formationStartTime, setFormationStartTime] = useState(null)
-    const [particleState, setParticleState] = useState('flocking') // 'flocking', 'forming', 'formed'
+    const [particleState, setParticleState] = useState('flocking') // 'flocking', 'forming', 'formed', 'dispersing'
+    const [assignedTargets, setAssignedTargets] = useState(null)
+    const [lastTargetTimestamp, setLastTargetTimestamp] = useState(null)
 
     const meshRef = useRef()
     const {theme, isDark} = useTheme()
@@ -22,40 +23,94 @@ function ParticleSystem({onShapeForm, targetShape}) {
 
     // Boundary constraints
     const boundaries = {
-        x: viewport.width * 0.7,  // 70% of viewport width
-        y: viewport.height * 0.7, // 70% of viewport height
+        x: viewport.width * 0.7,
+        y: viewport.height * 0.7,
         z: 20
     }
 
     useEffect(() => {
-        if (targetShape) {
-            // Make it async to handle image loading
-            const setupFormation = async () => {
-                try {
-                    const {positions: shapePositions, sizes: shapeSizes} =
-                        await ShapeGeometry.generateCircularShape(
-                            {x: 0, y: 0, z: 0},
-                            particleCount
+        // Only process if this is a new click (different timestamp)
+        if (targetShape && targetShape.timestamp !== lastTargetTimestamp) {
+            setLastTargetTimestamp(targetShape.timestamp)
+
+            // If already in formed state, start dispersing back to flocking
+            if (particleState === 'formed') {
+                setParticleState('dispersing')
+                setFormationStartTime(Date.now())
+                flocking.current.endTransition()
+                return
+            }
+
+            // Only start formation if currently flocking
+            if (particleState === 'flocking') {
+                const setupFormation = async () => {
+                    try {
+                        const {positions: shapePositions, sizes: shapeSizes} =
+                            await ShapeGeometry.generateCircularShape(
+                                targetShape.position,
+                                particleCount
+                            )
+
+                        // Pre-calculate particle-to-target assignments
+                        const assignments = assignParticlesToTargets(
+                            meshRef.current.geometry.attributes.position.array,
+                            shapePositions
                         )
-                    setTargetPositions(shapePositions)
-                    setTargetSizes(shapeSizes)
-                    setFormationStartTime(Date.now())
-                    setParticleState('forming')
-                    setClickPosition(targetShape.position)
-                } catch (error) {
-                    console.error('Failed to generate shape:', error)
+
+                        setAssignedTargets(assignments)
+                        setTargetPositions(shapePositions)
+                        setTargetSizes(shapeSizes)
+                        setFormationStartTime(Date.now())
+                        setParticleState('forming')
+
+                        // Gradually reduce flocking forces
+                        flocking.current.startTransition()
+                    } catch (error) {
+                        console.error('Failed to generate shape:', error)
+                    }
+                }
+                setupFormation()
+            }
+        }
+    }, [targetShape, particleCount, particleState, lastTargetTimestamp])
+
+    // Function to assign particles to nearest target positions
+    const assignParticlesToTargets = (currentPositions, targetPositions) => {
+        const assignments = new Int32Array(particleCount)
+        const used = new Set()
+
+        // For each particle, find the nearest unused target
+        for (let i = 0; i < particleCount; i++) {
+            const i3 = i * 3
+            let minDist = Infinity
+            let bestTarget = -1
+
+            for (let j = 0; j < particleCount; j++) {
+                if (used.has(j)) continue
+
+                const j3 = j * 3
+                const dx = currentPositions[i3] - targetPositions[j3]
+                const dy = currentPositions[i3 + 1] - targetPositions[j3 + 1]
+                const dz = currentPositions[i3 + 2] - targetPositions[j3 + 2]
+                const dist = dx * dx + dy * dy + dz * dz
+
+                if (dist < minDist) {
+                    minDist = dist
+                    bestTarget = j
                 }
             }
-            setupFormation()
-        }
-    }, [targetShape, particleCount])
 
+            assignments[i] = bestTarget
+            used.add(bestTarget)
+        }
+
+        return assignments
+    }
 
     // Add this new useMemo for sizes
     const sizes = useMemo(() => {
         const s = new Float32Array(particleCount)
         for (let i = 0; i < particleCount; i++) {
-            // Vary sizes for depth perception
             s[i] = 0.3 + Math.random() * 0.4
         }
         return s
@@ -64,7 +119,6 @@ function ParticleSystem({onShapeForm, targetShape}) {
     const filled = useMemo(() => {
         const f = new Float32Array(particleCount)
         for (let i = 0; i < particleCount; i++) {
-            // 80% filled, 20% hollow
             f[i] = Math.random() < 0.8 ? 1.0 : 0.0
         }
         return f
@@ -87,11 +141,11 @@ function ParticleSystem({onShapeForm, targetShape}) {
             const wave2 = Math.cos(t * Math.PI * 5) * 2
 
             // Create pointed edges - narrow at ends, wide in middle
-            const envelope = Math.sin(t * Math.PI) // 0 at edges, 1 at center
-            const pointiness = Math.pow(envelope, 0.3) // Make the curve sharper
+            const envelope = Math.sin(t * Math.PI)
+            const pointiness = Math.pow(envelope, 0.3)
 
-            // Vary the spread based on position - very narrow at tips
-            const spread = pointiness * 5 + 0.2 // 0.2 to 5.2 range
+            // Vary the spread based on position
+            const spread = pointiness * 5 + 0.2
 
             // Random offset for natural clustering
             const angle = Math.random() * Math.PI * 2
@@ -106,7 +160,7 @@ function ParticleSystem({onShapeForm, targetShape}) {
             pos[i * 3 + 2] = offsetZ
 
             // Add very few scattered particles
-            if (Math.random() < 0.02 && t > 0.1 && t < 0.9) { // 2% scattered, not at edges
+            if (Math.random() < 0.02 && t > 0.1 && t < 0.9) {
                 pos[i * 3] += (Math.random() - 0.5) * 5
                 pos[i * 3 + 1] += (Math.random() - 0.5) * 5
             }
@@ -115,14 +169,12 @@ function ParticleSystem({onShapeForm, targetShape}) {
         return pos
     }, [particleCount])
 
-
     // Particle colors for glow effect
     const colors = useMemo(() => {
         const cols = new Float32Array(particleCount * 3)
         const color = new THREE.Color(theme.particleColor)
 
         for (let i = 0; i < particleCount; i++) {
-            // Less variation for more uniform grey
             const brightness = 0.8 + Math.random() * 0.4
             cols[i * 3] = color.r * brightness
             cols[i * 3 + 1] = color.g * brightness
@@ -131,26 +183,37 @@ function ParticleSystem({onShapeForm, targetShape}) {
         return cols
     }, [particleCount, theme.particleColor])
 
+    // Smooth easing function
+    const easeInOutCubic = (t) => {
+        return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2
+    }
 
-    // Animation with boundary checking
+    // Animation with smooth transitions
     useFrame((state, delta) => {
         if (!meshRef.current) return
 
         const positions = meshRef.current.geometry.attributes.position.array
+        const time = Date.now() * 0.001
 
         if (particleState === 'flocking') {
-            // Apply flocking behavior
+            // Normal flocking behavior
             flocking.current.update(positions, Math.min(delta, 0.1))
-        } else if ((particleState === 'forming' || particleState === 'formed') && targetPositions) {
-            const elapsedTime = (Date.now() - formationStartTime) / 1000
-            const time = Date.now() * 0.001
 
-            // Continuous smooth transition that never fully completes
-            const t = Math.min(elapsedTime / 5, 0.9) // Max 90%, never 100%
-            const easing = t * t * (3 - 2 * t)
+        } else if (particleState === 'forming' && targetPositions && assignedTargets) {
+            // Direct transition from current positions to target positions
+            const elapsedTime = (Date.now() - formationStartTime) / 1000
+            const formProgress = Math.min(elapsedTime / 4, 1) // 4 seconds to form
+            const easedProgress = easeInOutCubic(formProgress)
+
+            // Reduce flocking influence gradually
+            if (formProgress < 0.5) {
+                flocking.current.update(positions, Math.min(delta, 0.1) * (1 - formProgress * 2))
+            }
 
             for (let i = 0; i < particleCount; i++) {
                 const i3 = i * 3
+                const targetIndex = assignedTargets[i]
+                const t3 = targetIndex * 3
 
                 // Current position
                 const currentX = positions[i3]
@@ -158,53 +221,76 @@ function ParticleSystem({onShapeForm, targetShape}) {
                 const currentZ = positions[i3 + 2]
 
                 // Target position
-                const targetX = targetPositions[i3]
-                const targetY = targetPositions[i3 + 1]
-                const targetZ = targetPositions[i3 + 2]
+                const targetX = targetPositions[t3]
+                const targetY = targetPositions[t3 + 1]
+                const targetZ = targetPositions[t3 + 2]
 
-                // Organic movement that starts immediately
-                const phase = i * 0.1
-                const breathX = Math.sin(time * 0.5 + phase) * 0.5
-                const breathY = Math.cos(time * 0.7 + phase * 1.3) * 0.5
-                const breathZ = Math.sin(time * 0.9 + phase * 0.7) * 0.3
+                // Smooth interpolation
+                positions[i3] = currentX + (targetX - currentX) * easedProgress * 0.05
+                positions[i3 + 1] = currentY + (targetY - currentY) * easedProgress * 0.05
+                positions[i3 + 2] = currentZ + (targetZ - currentZ) * easedProgress * 0.05
 
-                // Combined target with organic offset
-                const finalTargetX = targetX + breathX
-                const finalTargetY = targetY + breathY
-                const finalTargetZ = targetZ + breathZ
-
-                // Smooth movement towards target + organic motion
-                const moveSpeed = 0.035 * easing
-                const newX = currentX + (finalTargetX - currentX) * moveSpeed
-                const newY = currentY + (finalTargetY - currentY) * moveSpeed
-                const newZ = currentZ + (finalTargetZ - currentZ) * moveSpeed
-
-                // Update position
-                positions[i3] = newX
-                positions[i3 + 1] = newY
-                positions[i3 + 2] = newZ
-
-                // Update velocity for consistency
-                flocking.current.velocities[i3] = (newX - currentX) / delta
-                flocking.current.velocities[i3 + 1] = (newY - currentY) / delta
-                flocking.current.velocities[i3 + 2] = (newZ - currentZ) / delta
+                // Update velocities to match movement
+                flocking.current.velocities[i3] = (positions[i3] - currentX) / delta
+                flocking.current.velocities[i3 + 1] = (positions[i3 + 1] - currentY) / delta
+                flocking.current.velocities[i3 + 2] = (positions[i3 + 2] - currentZ) / delta
             }
 
-            // State transition without behavior change
-            if (particleState === 'forming' && elapsedTime > 4) {
+            if (formProgress >= 1) {
                 setParticleState('formed')
-
-                if (targetSizes) {
-                    const sizeAttribute = meshRef.current.geometry.attributes.size
-                    for (let i = 0; i < particleCount; i++) {
-                        const currentSize = sizeAttribute.array[i]
-                        const targetSize = targetSizes[i]
-                        sizeAttribute.array[i] = currentSize * 0.9 + targetSize * 0.1
-                    }
-                    sizeAttribute.needsUpdate = true
+                if (onShapeForm) {
+                    onShapeForm(targetShape.position)
                 }
+            }
 
-                if (onShapeForm) onShapeForm({x: 0, y: 0, z: 0})
+        } else if (particleState === 'formed' && targetPositions && assignedTargets) {
+            // Maintain shape with subtle organic movement
+            for (let i = 0; i < particleCount; i++) {
+                const i3 = i * 3
+                const targetIndex = assignedTargets[i]
+                const t3 = targetIndex * 3
+
+                // Organic breathing movement
+                const phase = i * 0.1 + time
+                const breathX = Math.sin(phase * 0.5) * 0.2
+                const breathY = Math.cos(phase * 0.7) * 0.2
+                const breathZ = Math.sin(phase * 0.9) * 0.1
+
+                // Stay close to target with breathing
+                const targetX = targetPositions[t3] + breathX
+                const targetY = targetPositions[t3 + 1] + breathY
+                const targetZ = targetPositions[t3 + 2] + breathZ
+
+                positions[i3] = positions[i3] * 0.9 + targetX * 0.1
+                positions[i3 + 1] = positions[i3 + 1] * 0.9 + targetY * 0.1
+                positions[i3 + 2] = positions[i3 + 2] * 0.9 + targetZ * 0.1
+            }
+
+        } else if (particleState === 'dispersing') {
+            // Smooth transition back to flocking
+            const elapsedTime = (Date.now() - formationStartTime) / 1000
+            const disperseProgress = Math.min(elapsedTime / 3, 1) // 3 seconds to disperse
+
+            // Gradually increase flocking behavior
+            flocking.current.update(positions, Math.min(delta, 0.1) * disperseProgress)
+
+            // Add gentle random forces to break formation
+            if (disperseProgress < 0.5) {
+                for (let i = 0; i < particleCount; i++) {
+                    const i3 = i * 3
+                    const randomForce = (1 - disperseProgress * 2) * 0.5
+
+                    flocking.current.velocities[i3] += (Math.random() - 0.5) * randomForce
+                    flocking.current.velocities[i3 + 1] += (Math.random() - 0.5) * randomForce
+                    flocking.current.velocities[i3 + 2] += (Math.random() - 0.5) * randomForce * 0.5
+                }
+            }
+
+            if (disperseProgress >= 1) {
+                setParticleState('flocking')
+                setTargetPositions(null)
+                setAssignedTargets(null)
+                setTargetSizes(null)
             }
         }
 
@@ -213,16 +299,16 @@ function ParticleSystem({onShapeForm, targetShape}) {
             const i3 = i * 3
 
             if (Math.abs(positions[i3]) > boundaries.x) {
-                flocking.current.velocities[i3] *= 0.9
-                flocking.current.velocities[i3] -= Math.sign(positions[i3]) * 0.1
+                positions[i3] = Math.sign(positions[i3]) * boundaries.x * 0.95
+                flocking.current.velocities[i3] *= -0.5
             }
             if (Math.abs(positions[i3 + 1]) > boundaries.y) {
-                flocking.current.velocities[i3 + 1] *= 0.9
-                flocking.current.velocities[i3 + 1] -= Math.sign(positions[i3 + 1]) * 0.1
+                positions[i3 + 1] = Math.sign(positions[i3 + 1]) * boundaries.y * 0.95
+                flocking.current.velocities[i3 + 1] *= -0.5
             }
             if (Math.abs(positions[i3 + 2]) > boundaries.z) {
-                flocking.current.velocities[i3 + 2] *= 0.9
-                flocking.current.velocities[i3 + 2] -= Math.sign(positions[i3 + 2]) * 0.05
+                positions[i3 + 2] = Math.sign(positions[i3 + 2]) * boundaries.z * 0.95
+                flocking.current.velocities[i3 + 2] *= -0.5
             }
         }
 
@@ -262,7 +348,7 @@ function ParticleSystem({onShapeForm, targetShape}) {
                 fragmentShader={particleFragmentShader}
                 transparent={true}
                 vertexColors={true}
-                blending={isDark ? THREE.AdditiveBlending : THREE.NormalBlending}  // Different blending for light mode
+                blending={isDark ? THREE.AdditiveBlending : THREE.NormalBlending}
                 depthWrite={false}
             />
         </points>

@@ -319,4 +319,39 @@ export class FlockingBehavior {
             positions[i3 + 2] += this.velocities[i3 + 2] * deltaTime * this.params.speedMultiplier
         }
     }
+
+    startTransition() {
+        // Store original parameters
+        this.originalParams = { ...this.params }
+
+        // Gradually reduce flocking forces during transition
+        this.transitioning = true
+    }
+
+    endTransition() {
+        // Restore original parameters
+        if (this.originalParams) {
+            this.params = { ...this.originalParams }
+        }
+        this.transitioning = false
+
+        // Re-randomize velocities for natural flocking restart
+        for (let i = 0; i < this.particleCount; i++) {
+            const i3 = i * 3
+            const currentSpeed = Math.sqrt(
+                this.velocities[i3] * this.velocities[i3] +
+                this.velocities[i3 + 1] * this.velocities[i3 + 1] +
+                this.velocities[i3 + 2] * this.velocities[i3 + 2]
+            )
+
+            // Add some randomness to break out of formation
+            const angle = Math.random() * Math.PI * 2
+            const speed = Math.max(currentSpeed, 0.5) + Math.random() * 0.5
+
+            this.velocities[i3] += Math.cos(angle) * speed * 0.3
+            this.velocities[i3 + 1] += Math.sin(angle) * speed * 0.3
+            this.velocities[i3 + 2] += (Math.random() - 0.5) * speed * 0.1
+        }
+    }
+
 }
