@@ -4,7 +4,7 @@ import * as THREE from 'three'
 import {useTheme} from '../../contexts/ThemeContext'
 import {FlockingBehavior} from './FlockingBehavior'
 import {ShapeGeometry} from '../ShapeFormation/ShapeGeometry'
-import { particleVertexShader, particleFragmentShader } from './particleShader'
+import {particleVertexShader, particleFragmentShader} from './particleShader'
 
 
 function ParticleSystem({onShapeForm, targetShape}) {
@@ -15,7 +15,7 @@ function ParticleSystem({onShapeForm, targetShape}) {
     const [particleState, setParticleState] = useState('flocking') // 'flocking', 'forming', 'formed'
 
     const meshRef = useRef()
-    const { theme, isDark } = useTheme()
+    const {theme, isDark} = useTheme()
     const {viewport} = useThree()
     const particleCount = 2500
     const flocking = useRef(new FlockingBehavior(particleCount))
@@ -29,16 +29,24 @@ function ParticleSystem({onShapeForm, targetShape}) {
 
     useEffect(() => {
         if (targetShape) {
-            // Generate target positions - now returns positions and sizes
-            const { positions: shapePositions, sizes: shapeSizes } = ShapeGeometry.generateCircularShape(
-                { x: 0, y: 0, z: 0 }, // Center on screen
-                particleCount
-            )
-            setTargetPositions(shapePositions)
-            setTargetSizes(shapeSizes) // Add this state
-            setFormationStartTime(Date.now())
-            setParticleState('forming')
-            setClickPosition(targetShape.position)
+            // Make it async to handle image loading
+            const setupFormation = async () => {
+                try {
+                    const {positions: shapePositions, sizes: shapeSizes} =
+                        await ShapeGeometry.generateCircularShape(
+                            {x: 0, y: 0, z: 0},
+                            particleCount
+                        )
+                    setTargetPositions(shapePositions)
+                    setTargetSizes(shapeSizes)
+                    setFormationStartTime(Date.now())
+                    setParticleState('forming')
+                    setClickPosition(targetShape.position)
+                } catch (error) {
+                    console.error('Failed to generate shape:', error)
+                }
+            }
+            setupFormation()
         }
     }, [targetShape, particleCount])
 
@@ -108,8 +116,6 @@ function ParticleSystem({onShapeForm, targetShape}) {
     }, [particleCount])
 
 
-
-
     // Particle colors for glow effect
     const colors = useMemo(() => {
         const cols = new Float32Array(particleCount * 3)
@@ -135,63 +141,70 @@ function ParticleSystem({onShapeForm, targetShape}) {
         if (particleState === 'flocking') {
             // Apply flocking behavior
             flocking.current.update(positions, Math.min(delta, 0.1))
-        } else if (particleState === 'forming' && targetPositions && clickPosition) {
-            // Calculate elapsed time since formation started
+        } else if ((particleState === 'forming' || particleState === 'formed') && targetPositions) {
             const elapsedTime = (Date.now() - formationStartTime) / 1000
+            const time = Date.now() * 0.001
 
-            // Get formation forces
-            const formationForces = ShapeGeometry.calculateFormationForces(
-                positions,
-                targetPositions,
-                clickPosition,
-                particleCount,
-                elapsedTime
-            )
+            // Continuous smooth transition that never fully completes
+            const t = Math.min(elapsedTime / 5, 0.9) // Max 90%, never 100%
+            const easing = t * t * (3 - 2 * t)
 
-            // Apply formation forces
-            let allParticlesInPlace = true
             for (let i = 0; i < particleCount; i++) {
                 const i3 = i * 3
 
-                // Apply force
-                flocking.current.velocities[i3] += formationForces[i3] * delta
-                flocking.current.velocities[i3 + 1] += formationForces[i3 + 1] * delta
-                flocking.current.velocities[i3 + 2] += formationForces[i3 + 2] * delta
+                // Current position
+                const currentX = positions[i3]
+                const currentY = positions[i3 + 1]
+                const currentZ = positions[i3 + 2]
 
-                // Damping for smooth arrival
-                flocking.current.velocities[i3] *= 0.95
-                flocking.current.velocities[i3 + 1] *= 0.95
-                flocking.current.velocities[i3 + 2] *= 0.95
+                // Target position
+                const targetX = targetPositions[i3]
+                const targetY = targetPositions[i3 + 1]
+                const targetZ = targetPositions[i3 + 2]
+
+                // Organic movement that starts immediately
+                const phase = i * 0.1
+                const breathX = Math.sin(time * 0.5 + phase) * 0.5
+                const breathY = Math.cos(time * 0.7 + phase * 1.3) * 0.5
+                const breathZ = Math.sin(time * 0.9 + phase * 0.7) * 0.3
+
+                // Combined target with organic offset
+                const finalTargetX = targetX + breathX
+                const finalTargetY = targetY + breathY
+                const finalTargetZ = targetZ + breathZ
+
+                // Smooth movement towards target + organic motion
+                const moveSpeed = 0.035 * easing
+                const newX = currentX + (finalTargetX - currentX) * moveSpeed
+                const newY = currentY + (finalTargetY - currentY) * moveSpeed
+                const newZ = currentZ + (finalTargetZ - currentZ) * moveSpeed
 
                 // Update position
-                positions[i3] += flocking.current.velocities[i3] * delta
-                positions[i3 + 1] += flocking.current.velocities[i3 + 1] * delta
-                positions[i3 + 2] += flocking.current.velocities[i3 + 2] * delta
+                positions[i3] = newX
+                positions[i3 + 1] = newY
+                positions[i3 + 2] = newZ
 
-                // Check if particle is close to target
-                const distance = Math.sqrt(
-                    Math.pow(positions[i3] - targetPositions[i3], 2) +
-                    Math.pow(positions[i3 + 1] - targetPositions[i3 + 1], 2) +
-                    Math.pow(positions[i3 + 2] - targetPositions[i3 + 2], 2)
-                )
-
-                if (distance > 0.5) allParticlesInPlace = false
+                // Update velocity for consistency
+                flocking.current.velocities[i3] = (newX - currentX) / delta
+                flocking.current.velocities[i3 + 1] = (newY - currentY) / delta
+                flocking.current.velocities[i3 + 2] = (newZ - currentZ) / delta
             }
 
-            // Check if formation is complete
-            if (allParticlesInPlace || elapsedTime > 5) {
+            // State transition without behavior change
+            if (particleState === 'forming' && elapsedTime > 4) {
                 setParticleState('formed')
 
-                // Update particle sizes to target sizes
                 if (targetSizes) {
                     const sizeAttribute = meshRef.current.geometry.attributes.size
                     for (let i = 0; i < particleCount; i++) {
-                        sizeAttribute.array[i] = targetSizes[i]
+                        const currentSize = sizeAttribute.array[i]
+                        const targetSize = targetSizes[i]
+                        sizeAttribute.array[i] = currentSize * 0.9 + targetSize * 0.1
                     }
                     sizeAttribute.needsUpdate = true
                 }
 
-                if (onShapeForm) onShapeForm({ x: 0, y: 0, z: 0 })
+                if (onShapeForm) onShapeForm({x: 0, y: 0, z: 0})
             }
         }
 

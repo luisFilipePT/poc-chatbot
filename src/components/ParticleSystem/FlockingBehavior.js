@@ -11,9 +11,9 @@ export class FlockingBehavior {
             separationDistance: 2.0,
             alignmentDistance: 5.0,
             cohesionDistance: 5.0,
-            maxSpeed: 4.0,  // Much faster
-            maxForce: 0.3,  // Stronger forces
-            separationWeight: 2.5,
+            maxSpeed: 2.0,  // Reduce from 4.0
+            maxForce: 0.05,  // Reduce from 0.3
+            separationWeight: 1.5,  // Reduce from 2.5
             alignmentWeight: 1.0,
             cohesionWeight: 1.0
         }
