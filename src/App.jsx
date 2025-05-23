@@ -3,20 +3,23 @@ import { OrbitControls } from '@react-three/drei'
 import { EffectComposer, Bloom } from '@react-three/postprocessing'
 import Scene from './components/Scene/Scene'
 import ThemeToggle from './components/ThemeToggle/ThemeToggle'
+import ShapeText from './components/ShapeText/ShapeText'
 import { ThemeProvider, useTheme } from './contexts/ThemeContext'
 import * as THREE from 'three'
 import Stats from 'stats.js'
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import './App.css'
 
 function CanvasContent() {
     const { theme } = useTheme()
     const statsRef = useRef()
+    const [showText, setShowText] = useState(false)
+    const [textPosition, setTextPosition] = useState({ x: 0, y: 0, z: 0 })
 
     useEffect(() => {
         // Initialize Stats
         const stats = new Stats()
-        stats.showPanel(0) // 0: fps, 1: ms, 2: mb, 3+: custom
+        stats.showPanel(0)
         stats.dom.style.position = 'absolute'
         stats.dom.style.left = '10px'
         stats.dom.style.top = '10px'
@@ -28,8 +31,17 @@ function CanvasContent() {
         }
     }, [])
 
+    const handleTextShow = (position) => {
+        setTextPosition(position)
+        setShowText(true)
+    }
+
+    const handleTextHide = () => {
+        setShowText(false)
+    }
+
     return (
-        <div style={{ width: '100%', height: '100%', background: theme.background }}>
+        <div style={{ width: '100%', height: '100%', background: theme.background, position: 'relative' }}>
             <Canvas
                 camera={{
                     position: [0, 0, 50],
@@ -49,7 +61,11 @@ function CanvasContent() {
                     gl.setPixelRatio(Math.min(window.devicePixelRatio, 2))
                 }}
             >
-                <Scene stats={statsRef} />
+                <Scene
+                    stats={statsRef}
+                    onTextShow={handleTextShow}
+                    onTextHide={handleTextHide}
+                />
                 <OrbitControls enableZoom={false} enablePan={false} />
                 <EffectComposer>
                     <Bloom
@@ -60,6 +76,10 @@ function CanvasContent() {
                     />
                 </EffectComposer>
             </Canvas>
+
+            {/* Text overlay - Outside Canvas */}
+            <ShapeText visible={showText} position={textPosition} />
+
             <ThemeToggle />
         </div>
     )

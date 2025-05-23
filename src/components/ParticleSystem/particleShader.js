@@ -16,6 +16,7 @@ export const particleVertexShader = `
 export const particleFragmentShader = `
   varying vec3 vColor;
   varying float vFilled;
+  uniform bool isDarkTheme;
   
   void main() {
     vec2 center = gl_PointCoord - 0.5;
@@ -32,10 +33,16 @@ export const particleFragmentShader = `
       }
       gl_FragColor = vec4(vColor, 1.0);
     } else {
-      // Filled circle - full opacity
-      gl_FragColor = vec4(vColor, 1.0);
+      // Filled circle with gradient for light theme
+      float alpha = 1.0;
+      if (!isDarkTheme) {
+        // Soft edges for light theme
+        alpha = 1.0 - smoothstep(0.3, 0.5, dist);
+      }
+      gl_FragColor = vec4(vColor, alpha);
     }
   }
 `;
+
 
 

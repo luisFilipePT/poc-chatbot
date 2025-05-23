@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useFrame } from '@react-three/fiber'
 import ParticleSystem from '../ParticleSystem/ParticleSystem'
 
-function Scene({ stats }) {
+function Scene({ stats, onTextShow, onTextHide }) {
     const [targetShape, setTargetShape] = useState(null)
 
     // Update stats on each frame
@@ -13,11 +13,22 @@ function Scene({ stats }) {
     })
 
     const handleClick = (event) => {
+        // Hide text when clicking
+        onTextHide()
+
         // Set the target shape with the click position
         setTargetShape({
             position: event.point,
             timestamp: Date.now()
         })
+    }
+
+    const handleShapeFormed = (position) => {
+        console.log('Shape formed at:', position)
+        // Show text after shape forms
+        setTimeout(() => {
+            onTextShow(position)
+        }, 500)
     }
 
     return (
@@ -34,10 +45,9 @@ function Scene({ stats }) {
             </mesh>
 
             <ParticleSystem
-                onShapeForm={(clickPoint) => {
-                    console.log('Shape formed at:', clickPoint)
-                }}
+                onShapeForm={handleShapeFormed}
                 targetShape={targetShape}
+                onDisperse={onTextHide}
             />
         </>
     )

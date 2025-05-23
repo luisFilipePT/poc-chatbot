@@ -1,0 +1,80 @@
+@import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@400;600&display=swap');
+
+.shape-text {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    text-align: center;
+    font-family: 'Montserrat', sans-serif;
+    pointer-events: none;
+    z-index: 50;
+    opacity: 0;
+    transition: opacity 1s ease-in-out;
+}
+
+.shape-text.visible {
+    opacity: 1;
+}
+
+.shape-text .greeting {
+    font-size: 2.5rem;
+    font-weight: 600;
+    margin: 0 0 0.5rem 0;
+    letter-spacing: -0.02em;
+    animation: fadeInUp 2s ease-out forwards;
+    animation-delay: 0.3s;
+    opacity: 0;
+}
+
+.shape-text .subtitle {
+    font-size: 1.25rem;
+    font-weight: 400;
+    margin: 0;
+    opacity: 0;
+    animation: fadeInUp 2s ease-out forwards;
+    animation-delay: 0.6s;
+}
+
+.shape-text.visible .greeting,
+.shape-text.visible .subtitle {
+    animation-play-state: running;
+}
+
+@keyframes fadeInUp {
+    from {
+        opacity: 0;
+        transform: translateY(20px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+/* Responsive text sizes */
+@media (max-width: 768px) {
+    .shape-text .greeting {
+        font-size: 2rem;
+    }
+
+    .shape-text .subtitle {
+        font-size: 1rem;
+    }
+}
+
+/* Theme-specific shadows for better readability */
+.shape-text {
+    text-shadow:
+            0 2px 4px rgba(0, 0, 0, 0.1),
+            0 4px 8px rgba(0, 0, 0, 0.1);
+}
+
+/* Ensure text is readable in both themes */
+body.dark-theme .shape-text {
+    color: #ffffff;
+}
+
+body.light-theme .shape-text {
+    color: #000000;
+}

@@ -49,7 +49,8 @@ export function createDensityMap() {
 
     // Optionally save it
     const link = document.createElement('a')
-    link.download = 'density-map.png'
+    //link.download = 'density-map.png'
+    link.download = 'circle-test.png'
     link.href = dataURL
     // link.click() // Uncomment to auto-download
 

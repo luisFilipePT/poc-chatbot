@@ -12,7 +12,8 @@ export class ShapeGeometry {
         await new Promise((resolve, reject) => {
             img.onload = resolve
             img.onerror = reject
-            img.src = '/shape-density-map.png'
+            //img.src = '/shape-density-map.png'
+            img.src = '/circle-test.png'
         })
 
         const canvas = document.createElement('canvas')

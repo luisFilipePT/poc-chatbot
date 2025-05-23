@@ -7,7 +7,7 @@ import {ShapeGeometry} from '../ShapeFormation/ShapeGeometry'
 import {particleVertexShader, particleFragmentShader} from './particleShader'
 
 
-function ParticleSystem({onShapeForm, targetShape}) {
+function ParticleSystem({onShapeForm, targetShape, onDisperse}) {
     const [targetSizes, setTargetSizes] = useState(null)
     const [targetPositions, setTargetPositions] = useState(null)
     const [formationStartTime, setFormationStartTime] = useState(null)
@@ -38,6 +38,7 @@ function ParticleSystem({onShapeForm, targetShape}) {
                 setParticleState('dispersing')
                 setFormationStartTime(Date.now())
                 flocking.current.endTransition()
+                if (onDisperse) onDisperse() // Notify about dispersion
                 return
             }
 
@@ -175,13 +176,22 @@ function ParticleSystem({onShapeForm, targetShape}) {
         const color = new THREE.Color(theme.particleColor)
 
         for (let i = 0; i < particleCount; i++) {
-            const brightness = 0.8 + Math.random() * 0.4
-            cols[i * 3] = color.r * brightness
-            cols[i * 3 + 1] = color.g * brightness
-            cols[i * 3 + 2] = color.b * brightness
+            if (isDark) {
+                // Light particles for dark theme
+                const brightness = 0.8 + Math.random() * 0.4
+                cols[i * 3] = color.r * brightness
+                cols[i * 3 + 1] = color.g * brightness
+                cols[i * 3 + 2] = color.b * brightness
+            } else {
+                // Dark particles for light theme with some variation
+                const darkness = 0.1 + Math.random() * 0.3  // Very dark
+                cols[i * 3] = darkness
+                cols[i * 3 + 1] = darkness
+                cols[i * 3 + 2] = darkness
+            }
         }
         return cols
-    }, [particleCount, theme.particleColor])
+    }, [particleCount, theme.particleColor, isDark])
 
     // Smooth easing function
     const easeInOutCubic = (t) => {
@@ -242,30 +252,44 @@ function ParticleSystem({onShapeForm, targetShape}) {
                     onShapeForm(targetShape.position)
                 }
             }
-
         } else if (particleState === 'formed' && targetPositions && assignedTargets) {
-            // Maintain shape with subtle organic movement
+            // Spiral wave effect
+            const spiralTime = time * 0.8
+
+            let centerX = 0, centerY = 0, centerZ = 0
+            if (targetShape && targetShape.position) {
+                centerX = targetShape.position.x
+                centerY = targetShape.position.y
+                centerZ = targetShape.position.z
+            }
+
             for (let i = 0; i < particleCount; i++) {
                 const i3 = i * 3
                 const targetIndex = assignedTargets[i]
                 const t3 = targetIndex * 3
 
-                // Organic breathing movement
-                const phase = i * 0.1 + time
-                const breathX = Math.sin(phase * 0.5) * 0.2
-                const breathY = Math.cos(phase * 0.7) * 0.2
-                const breathZ = Math.sin(phase * 0.9) * 0.1
+                const targetX = targetPositions[t3]
+                const targetY = targetPositions[t3 + 1]
+                const targetZ = targetPositions[t3 + 2]
 
-                // Stay close to target with breathing
-                const targetX = targetPositions[t3] + breathX
-                const targetY = targetPositions[t3 + 1] + breathY
-                const targetZ = targetPositions[t3 + 2] + breathZ
+                // Convert to polar coordinates
+                const dx = targetX - centerX
+                const dy = targetY - centerY
+                const distance = Math.sqrt(dx * dx + dy * dy)
+                const angle = Math.atan2(dy, dx)
 
-                positions[i3] = positions[i3] * 0.9 + targetX * 0.1
-                positions[i3 + 1] = positions[i3 + 1] * 0.9 + targetY * 0.1
-                positions[i3 + 2] = positions[i3 + 2] * 0.9 + targetZ * 0.1
+                // Spiral wave
+                const spiralOffset = angle * 2 + distance * 0.3 - spiralTime * 5
+                const waveHeight = Math.sin(spiralOffset) * Math.exp(-distance / 20) * 0.5
+
+                const finalX = targetX
+                const finalY = targetY
+                const finalZ = targetZ + waveHeight
+
+                positions[i3] = positions[i3] * 0.9 + finalX * 0.1
+                positions[i3 + 1] = positions[i3 + 1] * 0.9 + finalY * 0.1
+                positions[i3 + 2] = positions[i3 + 2] * 0.9 + finalZ * 0.1
             }
-
         } else if (particleState === 'dispersing') {
             // Smooth transition back to flocking
             const elapsedTime = (Date.now() - formationStartTime) / 1000
@@ -350,7 +374,11 @@ function ParticleSystem({onShapeForm, targetShape}) {
                 vertexColors={true}
                 blending={isDark ? THREE.AdditiveBlending : THREE.NormalBlending}
                 depthWrite={false}
+                uniforms={{
+                    isDarkTheme: {value: isDark}
+                }}
             />
+
         </points>
     )
 }
