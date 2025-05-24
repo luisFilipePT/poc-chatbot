@@ -50,13 +50,16 @@ function CanvasContent() {
                     far: 1000
                 }}
                 gl={{
-                    antialias: true,
+                    antialias: false,  // Changed from true - big performance gain
                     alpha: true,
                     toneMapping: THREE.ACESFilmicToneMapping,
-                    powerPreference: "high-performance"
+                    powerPreference: "high-performance",
+                    stencil: false,    // Add this
+                    depth: true
                 }}
                 style={{ cursor: 'pointer' }}
                 frameloop="always"
+                dpr={Math.min(window.devicePixelRatio, 2)}  // Add this - limit pixel ratio
                 onCreated={({ gl }) => {
                     gl.setPixelRatio(Math.min(window.devicePixelRatio, 2))
                 }}
@@ -70,9 +73,11 @@ function CanvasContent() {
                 <EffectComposer>
                     <Bloom
                         intensity={0.2}
-                        luminanceThreshold={0.6}
-                        luminanceSmoothing={0.9}
-                        radius={0.4}
+                        luminanceThreshold={0.8}  // Increased from 0.6
+                        luminanceSmoothing={0.5}  // Reduced from 0.9
+                        radius={0.2}              // Reduced from 0.4
+                        levels={3}                // Add this - reduces blur passes
+                        mipmapBlur={true}         // Add this - more efficient blur
                     />
                 </EffectComposer>
             </Canvas>

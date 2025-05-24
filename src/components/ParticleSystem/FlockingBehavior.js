@@ -36,9 +36,31 @@ export class FlockingBehavior {
             predatorAvoidStrength: 2.0
         }
 
-        // Spatial optimization - divide space into grid cells
-        this.gridSize = 10
+        // OPTIMIZED: Increase grid size based on largest zone radius
+        this.gridSize = Math.max(
+            this.params.separationDistance,
+            this.params.alignmentDistance,
+            this.params.cohesionDistance
+        ) * 2  // Doubled for better performance
+
         this.grid = new Map()
+
+        // ADD THIS: Pre-allocate reusable vectors to avoid garbage collection
+        this.tempVectors = {
+            posI: new THREE.Vector3(),
+            posJ: new THREE.Vector3(),
+            diff: new THREE.Vector3(),
+            velJ: new THREE.Vector3(),
+            separation: new THREE.Vector3(),
+            alignment: new THREE.Vector3(),
+            cohesion: new THREE.Vector3(),
+            vel: new THREE.Vector3()
+        }
+
+        // ADD THIS: Pre-calculate squared distances
+        this.separationDistanceSq = this.params.separationDistance * this.params.separationDistance
+        this.alignmentDistanceSq = this.params.alignmentDistance * this.params.alignmentDistance
+        this.cohesionDistanceSq = this.params.cohesionDistance * this.params.cohesionDistance
 
         // Predator system
         this.predators = []
@@ -67,6 +89,11 @@ export class FlockingBehavior {
             this.params.cohesionDistance
         ) * 1.5
         this.params.zoneRadiusSquared = this.params.zoneRadius * this.params.zoneRadius
+
+        // Update pre-calculated squared distances when parameters change
+        this.separationDistanceSq = this.params.separationDistance * this.params.separationDistance
+        this.alignmentDistanceSq = this.params.alignmentDistance * this.params.alignmentDistance
+        this.cohesionDistanceSq = this.params.cohesionDistance * this.params.cohesionDistance
     }
 
     getGridKey(x, y, z) {
@@ -179,20 +206,18 @@ export class FlockingBehavior {
         // Update predators
         this.updatePredators(currentTime, centerOfMass)
 
-        // Temporary vectors to avoid allocation in loop
-        const posI = new THREE.Vector3()
-        const posJ = new THREE.Vector3()
-        const diff = new THREE.Vector3()
-        const velJ = new THREE.Vector3()
+        // OPTIMIZED: Use pre-allocated vectors instead of creating new ones
+        const { posI, posJ, diff, velJ, separation, alignment, cohesion, vel } = this.tempVectors
 
         // Calculate forces
         for (let i = 0; i < this.particleCount; i++) {
             const i3 = i * 3
             posI.set(positions[i3], positions[i3 + 1], positions[i3 + 2])
 
-            const separation = new THREE.Vector3()
-            const alignment = new THREE.Vector3()
-            const cohesion = new THREE.Vector3()
+            // Reset force vectors
+            separation.set(0, 0, 0)
+            alignment.set(0, 0, 0)
+            cohesion.set(0, 0, 0)
             let neighborCount = 0
 
             // Get potential neighbors from spatial grid
@@ -206,26 +231,29 @@ export class FlockingBehavior {
                 diff.subVectors(posI, posJ)
 
                 const distSquared = diff.lengthSq()
+
+                // OPTIMIZED: Skip if outside zone radius or too close
                 if (distSquared > this.params.zoneRadiusSquared || distSquared < 0.01) continue
 
-                const distance = Math.sqrt(distSquared)
                 neighborCount++
 
-                // Separation
-                if (distance < this.params.separationDistance) {
+                // OPTIMIZED: Use squared distances to avoid sqrt when possible
+                // Separation (only calculate sqrt when needed)
+                if (distSquared < this.separationDistanceSq) {
+                    const distance = Math.sqrt(distSquared)
                     const force = (this.params.separationDistance - distance) / this.params.separationDistance
-                    diff.normalize().multiplyScalar(force * force) // Quadratic falloff
+                    diff.normalize().multiplyScalar(force * force)
                     separation.add(diff)
                 }
 
-                // Alignment
-                if (distance < this.params.alignmentDistance) {
+                // Alignment (no sqrt needed)
+                if (distSquared < this.alignmentDistanceSq) {
                     velJ.set(this.velocities[j3], this.velocities[j3 + 1], this.velocities[j3 + 2])
                     alignment.add(velJ)
                 }
 
-                // Cohesion
-                if (distance < this.params.cohesionDistance) {
+                // Cohesion (no sqrt needed)
+                if (distSquared < this.cohesionDistanceSq) {
                     cohesion.add(posJ)
                 }
             }
@@ -292,8 +320,6 @@ export class FlockingBehavior {
         }
 
         // Update velocities and positions
-        const vel = new THREE.Vector3()
-
         for (let i = 0; i < this.particleCount; i++) {
             const i3 = i * 3
 
@@ -302,7 +328,7 @@ export class FlockingBehavior {
             this.velocities[i3 + 1] = (this.velocities[i3 + 1] + this.accelerations[i3 + 1]) * this.params.verticalDamping
             this.velocities[i3 + 2] = (this.velocities[i3 + 2] + this.accelerations[i3 + 2]) * this.params.damping
 
-            // Limit speed
+            // Limit speed using pre-allocated vector
             vel.set(this.velocities[i3], this.velocities[i3 + 1], this.velocities[i3 + 2])
             const speed = vel.length()
 
@@ -353,5 +379,4 @@ export class FlockingBehavior {
             this.velocities[i3 + 2] += (Math.random() - 0.5) * speed * 0.1
         }
     }
-
 }
