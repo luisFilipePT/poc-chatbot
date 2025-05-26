@@ -4,9 +4,8 @@ import * as THREE from 'three'
 import { useTheme } from '../../contexts/ThemeContext'
 import { FlockingBehavior } from './FlockingBehavior'
 import { ShapeGeometry } from '../ShapeFormation/ShapeGeometry'
-import { particleVertexShader, particleFragmentShader } from './particleShader'
 
-function ParticleSystem({ onShapeForm, targetShape, onDisperse }) {
+function OptimizedParticleSystem({ onShapeForm, targetShape, onDisperse }) {
     const [targetSizes, setTargetSizes] = useState(null)
     const [targetPositions, setTargetPositions] = useState(null)
     const [formationStartTime, setFormationStartTime] = useState(null)
@@ -19,7 +18,7 @@ function ParticleSystem({ onShapeForm, targetShape, onDisperse }) {
     const { viewport } = useThree()
 
     // Increased particle count with optimizations
-    const particleCount = 2500 // Doubled from original
+    const particleCount = 5000 // Doubled from original
     const flocking = useRef(new FlockingBehavior(particleCount))
 
     // Performance monitoring
@@ -33,7 +32,7 @@ function ParticleSystem({ onShapeForm, targetShape, onDisperse }) {
         z: 20
     }
 
-    // Initialize shader uniforms
+    // Optimized shader uniforms
     const uniforms = useMemo(() => ({
         uTime: { value: 0 },
         uTransition: { value: 0 },
@@ -49,6 +48,180 @@ function ParticleSystem({ onShapeForm, targetShape, onDisperse }) {
     useEffect(() => {
         uniforms.isDarkTheme.value = isDark
     }, [isDark, uniforms])
+
+    // Optimized vertex shader
+    const optimizedVertexShader = `
+        attribute float size;
+        attribute float filled;
+        
+        varying float vFilled;
+        varying vec3 vColor;
+        varying float vDistance;
+        varying float vPhase;
+        
+        uniform float uTime;
+        uniform float uTransition;
+        uniform float uFormationProgress;
+        uniform vec3 uClickPosition;
+        uniform float uSpiralTime;
+        uniform bool uIsFormed;
+        
+        void main() {
+            vec3 pos = position;
+            
+            // Calculate phase for organic movement
+            vPhase = pos.x * 0.1 + pos.y * 0.1;
+            
+            // Add organic movement during transition
+            float organicStrength = 1.0 - smoothstep(0.7, 1.0, uTransition);
+            if (organicStrength > 0.0) {
+                float breathX = sin(uTime * 0.5 + vPhase) * 0.5;
+                float breathY = cos(uTime * 0.7 + vPhase * 1.3) * 0.5;
+                float breathZ = sin(uTime * 0.9 + vPhase * 0.7) * 0.3;
+                
+                pos.x += breathX * organicStrength * (1.0 - uTransition);
+                pos.y += breathY * organicStrength * (1.0 - uTransition);
+                pos.z += breathZ * organicStrength * (1.0 - uTransition);
+            }
+            
+            // Apply spiral wave effect when shape is formed
+            if (uIsFormed && uClickPosition.x != 0.0) {
+                vec2 centerOffset = pos.xy - uClickPosition.xy;
+                float distance = length(centerOffset);
+                float angle = atan(centerOffset.y, centerOffset.x);
+                
+                float spiralOffset = angle * 2.0 + distance * 0.3 - uSpiralTime * 5.0;
+                float waveHeight = sin(spiralOffset) * exp(-distance / 20.0) * 0.5;
+                
+                pos.z += waveHeight * uTransition;
+            }
+            
+            vColor = color;
+            vFilled = filled;
+            vec4 mvPosition = modelViewMatrix * vec4(pos, 1.0);
+            vDistance = -mvPosition.z;
+            
+            // Adaptive point size
+            float baseSize = size;
+            if (uTransition > 0.0 && uTransition < 1.0) {
+                baseSize *= mix(1.0, 0.7, uTransition);
+            }
+            
+            gl_PointSize = clamp(baseSize * (300.0 / vDistance), 1.0, 64.0);
+            gl_Position = projectionMatrix * mvPosition;
+        }
+    `
+
+    // Optimized fragment shader
+    const optimizedFragmentShader = `
+        varying vec3 vColor;
+        varying float vFilled;
+        varying float vDistance;
+        varying float vPhase;
+        
+        uniform bool isDarkTheme;
+        uniform float uOpacity;
+        uniform float uTransition;
+        uniform float uTime;
+        
+        void main() {
+            vec2 center = gl_PointCoord - 0.5;
+            float dist = length(center);
+            
+            if (dist > 0.5) {
+                discard;
+            }
+            
+            // LOD - simpler rendering for distant particles
+            if (vDistance > 80.0) {
+                gl_FragColor = vec4(vColor, 0.5 * uOpacity);
+                return;
+            }
+            
+            float alpha = 1.0;
+            
+            if (vFilled < 0.5) {
+                // Hollow circle
+                if (dist < 0.4) {
+                    discard;
+                }
+            } else {
+                // Filled circle with soft edges
+                if (!isDarkTheme) {
+                    alpha = 1.0 - smoothstep(0.3, 0.5, dist);
+                }
+            }
+            
+            // Add subtle pulsing during formation using vPhase
+            if (uTransition > 0.0 && uTransition < 1.0) {
+                float pulse = sin(uTime * 3.0 + vPhase * 10.0) * 0.1 + 0.9;
+                alpha *= pulse;
+            }
+            
+            alpha *= uOpacity;
+            gl_FragColor = vec4(vColor, alpha);
+        }
+    `
+
+    // Initialize particle attributes with optimizations
+    const { sizes, filled, positions, colors } = useMemo(() => {
+        const s = new Float32Array(particleCount)
+        const f = new Float32Array(particleCount)
+        const pos = new Float32Array(particleCount * 3)
+        const cols = new Float32Array(particleCount * 3)
+
+        const color = new THREE.Color(theme.particleColor)
+
+        for (let i = 0; i < particleCount; i++) {
+            const i3 = i * 3
+
+            // Particle properties
+            s[i] = 0.3 + Math.random() * 0.4
+            f[i] = Math.random() < 0.8 ? 1.0 : 0.0
+
+            // Initialize with murmuration shape
+            const t = i / particleCount
+            const baseX = -20 + t * 40
+            const baseY = -10 + t * 20
+
+            const wave1 = Math.sin(t * Math.PI * 3) * 4
+            const wave2 = Math.cos(t * Math.PI * 5) * 2
+
+            const envelope = Math.sin(t * Math.PI)
+            const pointiness = Math.pow(envelope, 0.3)
+            const spread = pointiness * 5 + 0.2
+
+            const angle = Math.random() * Math.PI * 2
+            const radius = Math.random() * spread
+            const offsetX = Math.cos(angle) * radius
+            const offsetY = Math.sin(angle) * radius
+            const offsetZ = (Math.random() - 0.5) * 2 * pointiness
+
+            pos[i3] = baseX + wave1 + offsetX
+            pos[i3 + 1] = baseY + wave2 + offsetY
+            pos[i3 + 2] = offsetZ
+
+            // Colors
+            if (isDark) {
+                const brightness = 0.8 + Math.random() * 0.4
+                cols[i3] = color.r * brightness
+                cols[i3 + 1] = color.g * brightness
+                cols[i3 + 2] = color.b * brightness
+            } else {
+                const darkness = 0.1 + Math.random() * 0.3
+                cols[i3] = darkness
+                cols[i3 + 1] = darkness
+                cols[i3 + 2] = darkness
+            }
+
+            if (Math.random() < 0.02 && t > 0.1 && t < 0.9) {
+                pos[i3] += (Math.random() - 0.5) * 5
+                pos[i3 + 1] += (Math.random() - 0.5) * 5
+            }
+        }
+
+        return { sizes: s, filled: f, positions: pos, colors: cols }
+    }, [particleCount, theme.particleColor, isDark])
 
     // Handle target shape formation
     useEffect(() => {
@@ -95,12 +268,13 @@ function ParticleSystem({ onShapeForm, targetShape, onDisperse }) {
         }
     }, [targetShape, particleCount, particleState, lastTargetTimestamp, uniforms, onDisperse])
 
-    // Optimized particle assignment
+    // Optimized particle assignment with spatial hashing
     const assignParticlesToTargets = (currentPositions, targetPositions) => {
         const assignments = new Int32Array(particleCount)
         const particles = []
         const targets = []
 
+        // Create particle and target arrays
         for (let i = 0; i < particleCount; i++) {
             particles.push({
                 index: i,
@@ -121,17 +295,17 @@ function ParticleSystem({ onShapeForm, targetShape, onDisperse }) {
         particles.sort((a, b) => a.x - b.x)
         targets.sort((a, b) => a.x - b.x)
 
-        // Greedy assignment with early termination
+        // Optimized assignment with early termination
         for (const particle of particles) {
             let minDistSq = Infinity
             let bestTarget = null
 
+            // Use spatial coherence to limit search
             for (const target of targets) {
                 if (target.assigned) continue
 
-                // Early termination if x distance is too large
                 const xDist = Math.abs(target.x - particle.x)
-                if (xDist * xDist > minDistSq) break
+                if (xDist * xDist > minDistSq) break // Early termination
 
                 const dx = target.x - particle.x
                 const dy = target.y - particle.y
@@ -153,85 +327,12 @@ function ParticleSystem({ onShapeForm, targetShape, onDisperse }) {
         return assignments
     }
 
-    // Initialize particle attributes
-    const sizes = useMemo(() => {
-        const s = new Float32Array(particleCount)
-        for (let i = 0; i < particleCount; i++) {
-            s[i] = 0.3 + Math.random() * 0.4
-        }
-        return s
-    }, [particleCount])
-
-    const filled = useMemo(() => {
-        const f = new Float32Array(particleCount)
-        for (let i = 0; i < particleCount; i++) {
-            f[i] = Math.random() < 0.8 ? 1.0 : 0.0
-        }
-        return f
-    }, [particleCount])
-
-    // Initialize positions with murmuration shape
-    const positions = useMemo(() => {
-        const pos = new Float32Array(particleCount * 3)
-
-        for (let i = 0; i < particleCount; i++) {
-            const t = i / particleCount
-            const baseX = -20 + t * 40
-            const baseY = -10 + t * 20
-
-            const wave1 = Math.sin(t * Math.PI * 3) * 4
-            const wave2 = Math.cos(t * Math.PI * 5) * 2
-
-            const envelope = Math.sin(t * Math.PI)
-            const pointiness = Math.pow(envelope, 0.3)
-            const spread = pointiness * 5 + 0.2
-
-            const angle = Math.random() * Math.PI * 2
-            const radius = Math.random() * spread
-            const offsetX = Math.cos(angle) * radius
-            const offsetY = Math.sin(angle) * radius
-            const offsetZ = (Math.random() - 0.5) * 2 * pointiness
-
-            pos[i * 3] = baseX + wave1 + offsetX
-            pos[i * 3 + 1] = baseY + wave2 + offsetY
-            pos[i * 3 + 2] = offsetZ
-
-            if (Math.random() < 0.02 && t > 0.1 && t < 0.9) {
-                pos[i * 3] += (Math.random() - 0.5) * 5
-                pos[i * 3 + 1] += (Math.random() - 0.5) * 5
-            }
-        }
-
-        return pos
-    }, [particleCount])
-
-    // Particle colors
-    const colors = useMemo(() => {
-        const cols = new Float32Array(particleCount * 3)
-        const color = new THREE.Color(theme.particleColor)
-
-        for (let i = 0; i < particleCount; i++) {
-            if (isDark) {
-                const brightness = 0.8 + Math.random() * 0.4
-                cols[i * 3] = color.r * brightness
-                cols[i * 3 + 1] = color.g * brightness
-                cols[i * 3 + 2] = color.b * brightness
-            } else {
-                const darkness = 0.1 + Math.random() * 0.3
-                cols[i * 3] = darkness
-                cols[i * 3 + 1] = darkness
-                cols[i * 3 + 2] = darkness
-            }
-        }
-        return cols
-    }, [particleCount, theme.particleColor, isDark])
-
     // Smooth easing function
     const easeInOutCubic = (t) => {
         return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2
     }
 
-    // Main animation loop
+    // Main animation loop with optimizations
     useFrame((state, delta) => {
         if (!meshRef.current) return
 
@@ -241,7 +342,7 @@ function ParticleSystem({ onShapeForm, targetShape, onDisperse }) {
         if (now - lastFpsCheck.current > 1000) {
             const fps = frameCount.current
             if (fps < 30) {
-                console.warn(`Low FPS: ${fps}`)
+                console.warn(`Performance warning: ${fps} FPS`)
             }
             frameCount.current = 0
             lastFpsCheck.current = now
@@ -255,23 +356,26 @@ function ParticleSystem({ onShapeForm, targetShape, onDisperse }) {
 
         // State-based animations
         if (particleState === 'flocking') {
-            flocking.current.update(positions, Math.min(delta, 0.033)) // Cap delta time
+            // Use optimized flocking with capped delta time
+            flocking.current.update(positions, Math.min(delta, 0.033))
             uniforms.uTransition.value = 0
             uniforms.uFormationProgress.value = 0
             uniforms.uIsFormed.value = false
 
         } else if (particleState === 'forming' && targetPositions && assignedTargets) {
             const elapsedTime = (Date.now() - formationStartTime) / 1000
-            const formProgress = Math.min(elapsedTime / 3, 1) // Faster formation (3s instead of 4s)
+            const formProgress = Math.min(elapsedTime / 3, 1) // Faster formation
             const easedProgress = easeInOutCubic(formProgress)
 
             uniforms.uTransition.value = easedProgress
             uniforms.uFormationProgress.value = formProgress
 
+            // Reduce flocking influence during formation
             if (formProgress < 0.5) {
                 flocking.current.update(positions, Math.min(delta, 0.033) * (1 - formProgress * 2))
             }
 
+            // Interpolate to target positions
             for (let i = 0; i < particleCount; i++) {
                 const i3 = i * 3
                 const targetIndex = assignedTargets[i]
@@ -286,11 +390,12 @@ function ParticleSystem({ onShapeForm, targetShape, onDisperse }) {
                 const targetZ = targetPositions[t3 + 2]
 
                 // Faster interpolation
-                const lerpFactor = easedProgress * 0.08 // Increased from 0.05
+                const lerpFactor = easedProgress * 0.08
                 positions[i3] = currentX + (targetX - currentX) * lerpFactor
                 positions[i3 + 1] = currentY + (targetY - currentY) * lerpFactor
                 positions[i3 + 2] = currentZ + (targetZ - currentZ) * lerpFactor
 
+                // Update velocities for smooth transition
                 if (delta > 0) {
                     flocking.current.velocities[i3] = (positions[i3] - currentX) / delta
                     flocking.current.velocities[i3 + 1] = (positions[i3 + 1] - currentY) / delta
@@ -318,6 +423,7 @@ function ParticleSystem({ onShapeForm, targetShape, onDisperse }) {
                 centerZ = targetShape.position.z
             }
 
+            // Maintain formation with subtle animation
             for (let i = 0; i < particleCount; i++) {
                 const i3 = i * 3
                 const targetIndex = assignedTargets[i]
@@ -339,6 +445,7 @@ function ParticleSystem({ onShapeForm, targetShape, onDisperse }) {
                 const finalY = targetY
                 const finalZ = targetZ + waveHeight
 
+                // Smooth interpolation to maintain formation
                 positions[i3] = positions[i3] * 0.95 + finalX * 0.05
                 positions[i3 + 1] = positions[i3 + 1] * 0.95 + finalY * 0.05
                 positions[i3 + 2] = positions[i3 + 2] * 0.95 + finalZ * 0.05
@@ -346,18 +453,20 @@ function ParticleSystem({ onShapeForm, targetShape, onDisperse }) {
 
         } else if (particleState === 'dispersing') {
             const elapsedTime = (Date.now() - formationStartTime) / 1000
-            const disperseProgress = Math.min(elapsedTime / 2, 1) // Faster dispersal (2s instead of 3s)
+            const disperseProgress = Math.min(elapsedTime / 2, 1) // Faster dispersal
 
             uniforms.uTransition.value = Math.max(1 - disperseProgress, 0)
             uniforms.uFormationProgress.value = 1 - disperseProgress
             uniforms.uIsFormed.value = false
 
+            // Resume flocking with increasing influence
             flocking.current.update(positions, Math.min(delta, 0.033) * disperseProgress)
 
+            // Add dispersal forces
             if (disperseProgress < 0.5) {
                 for (let i = 0; i < particleCount; i++) {
                     const i3 = i * 3
-                    const randomForce = (1 - disperseProgress * 2) * 0.8 // Increased force
+                    const randomForce = (1 - disperseProgress * 2) * 0.8
 
                     flocking.current.velocities[i3] += (Math.random() - 0.5) * randomForce
                     flocking.current.velocities[i3 + 1] += (Math.random() - 0.5) * randomForce
@@ -440,8 +549,8 @@ function ParticleSystem({ onShapeForm, targetShape, onDisperse }) {
             </bufferGeometry>
             <shaderMaterial
                 uniforms={uniforms}
-                vertexShader={particleVertexShader}
-                fragmentShader={particleFragmentShader}
+                vertexShader={optimizedVertexShader}
+                fragmentShader={optimizedFragmentShader}
                 transparent={true}
                 vertexColors={true}
                 blending={isDark ? THREE.AdditiveBlending : THREE.NormalBlending}
@@ -451,4 +560,4 @@ function ParticleSystem({ onShapeForm, targetShape, onDisperse }) {
     )
 }
 
-export default ParticleSystem
+export default OptimizedParticleSystem
