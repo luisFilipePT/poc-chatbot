@@ -45,7 +45,15 @@ export class FlockingBehavior {
 
         this.grid = new Map()
 
-        // ADD THIS: Pre-allocate reusable vectors to avoid garbage collection
+        // OPTIMIZED: Pre-allocate typed arrays for better performance
+        this.neighborCounts = new Uint16Array(particleCount)
+        this.tempForces = {
+            separation: new Float32Array(particleCount * 3),
+            alignment: new Float32Array(particleCount * 3),
+            cohesion: new Float32Array(particleCount * 3)
+        }
+
+        // Pre-allocate reusable vectors to avoid garbage collection
         this.tempVectors = {
             posI: new THREE.Vector3(),
             posJ: new THREE.Vector3(),
@@ -54,10 +62,11 @@ export class FlockingBehavior {
             separation: new THREE.Vector3(),
             alignment: new THREE.Vector3(),
             cohesion: new THREE.Vector3(),
-            vel: new THREE.Vector3()
+            vel: new THREE.Vector3(),
+            centerOfMass: new THREE.Vector3()
         }
 
-        // ADD THIS: Pre-calculate squared distances
+        // Pre-calculate squared distances
         this.separationDistanceSq = this.params.separationDistance * this.params.separationDistance
         this.alignmentDistanceSq = this.params.alignmentDistance * this.params.alignmentDistance
         this.cohesionDistanceSq = this.params.cohesionDistance * this.params.cohesionDistance
@@ -67,6 +76,11 @@ export class FlockingBehavior {
         this.lastDisruptionTime = 0
         this.disruptionInterval = 15000
         this.disruptionDuration = 5000
+
+        // OPTIMIZED: Frame counting for reduced update frequency
+        this.frameCount = 0
+        this.predatorUpdateInterval = 2 // Update predators every 2 frames
+        this.centerUpdateInterval = 2 // Update center every 2 frames
 
         // Initialize with smooth velocities
         for (let i = 0; i < particleCount; i++) {
@@ -123,7 +137,7 @@ export class FlockingBehavior {
         const gy = Math.floor(y / this.gridSize)
         const gz = Math.floor(z / this.gridSize)
 
-        // Check surrounding cells
+        // Check surrounding cells - keeping original logic
         for (let dx = -1; dx <= 1; dx++) {
             for (let dy = -1; dy <= 1; dy++) {
                 for (let dz = -1; dz <= 1; dz++) {
@@ -137,6 +151,21 @@ export class FlockingBehavior {
         }
 
         return neighbors
+    }
+
+    // OPTIMIZED: Calculate center of mass less frequently
+    calculateCenterOfMass(positions) {
+        const { centerOfMass } = this.tempVectors
+        centerOfMass.set(0, 0, 0)
+
+        for (let i = 0; i < this.particleCount; i++) {
+            const i3 = i * 3
+            centerOfMass.x += positions[i3]
+            centerOfMass.y += positions[i3 + 1]
+            centerOfMass.z += positions[i3 + 2]
+        }
+        centerOfMass.divideScalar(this.particleCount)
+        return centerOfMass
     }
 
     updatePredators(currentTime, flockCenter) {
@@ -186,30 +215,36 @@ export class FlockingBehavior {
     update(positions, deltaTime) {
         const currentTime = Date.now()
         deltaTime = Math.min(deltaTime, 0.033) // Cap at ~30fps minimum
+        this.frameCount++
 
         // Build spatial grid for optimization
         this.buildSpatialGrid(positions)
 
-        // Reset accelerations
+        // OPTIMIZED: Reset arrays more efficiently
         this.accelerations.fill(0)
+        this.neighborCounts.fill(0)
+        this.tempForces.separation.fill(0)
+        this.tempForces.alignment.fill(0)
+        this.tempForces.cohesion.fill(0)
 
-        // Calculate center of mass
-        const centerOfMass = new THREE.Vector3()
-        for (let i = 0; i < this.particleCount; i++) {
-            const i3 = i * 3
-            centerOfMass.x += positions[i3]
-            centerOfMass.y += positions[i3 + 1]
-            centerOfMass.z += positions[i3 + 2]
+        // OPTIMIZED: Calculate center of mass less frequently
+        let centerOfMass
+        if (this.frameCount % this.centerUpdateInterval === 0 || !this.lastCenterOfMass) {
+            centerOfMass = this.calculateCenterOfMass(positions)
+            this.lastCenterOfMass = centerOfMass.clone()
+        } else {
+            centerOfMass = this.lastCenterOfMass
         }
-        centerOfMass.divideScalar(this.particleCount)
 
-        // Update predators
-        this.updatePredators(currentTime, centerOfMass)
+        // OPTIMIZED: Update predators less frequently
+        if (this.frameCount % this.predatorUpdateInterval === 0) {
+            this.updatePredators(currentTime, centerOfMass)
+        }
 
-        // OPTIMIZED: Use pre-allocated vectors instead of creating new ones
+        // Use pre-allocated vectors instead of creating new ones
         const { posI, posJ, diff, velJ, separation, alignment, cohesion, vel } = this.tempVectors
 
-        // Calculate forces
+        // OPTIMIZED: Calculate forces with batched operations
         for (let i = 0; i < this.particleCount; i++) {
             const i3 = i * 3
             posI.set(positions[i3], positions[i3 + 1], positions[i3 + 2])
@@ -223,40 +258,52 @@ export class FlockingBehavior {
             // Get potential neighbors from spatial grid
             const neighbors = this.getNeighbors(positions[i3], positions[i3 + 1], positions[i3 + 2])
 
-            for (const j of neighbors) {
+            // OPTIMIZED: Process neighbors with early exit and inline calculations
+            for (let n = 0; n < neighbors.length; n++) {
+                const j = neighbors[n]
                 if (i === j) continue
 
                 const j3 = j * 3
-                posJ.set(positions[j3], positions[j3 + 1], positions[j3 + 2])
-                diff.subVectors(posI, posJ)
 
-                const distSquared = diff.lengthSq()
+                // OPTIMIZED: Inline distance calculation
+                const dx = positions[i3] - positions[j3]
+                const dy = positions[i3 + 1] - positions[j3 + 1]
+                const dz = positions[i3 + 2] - positions[j3 + 2]
+                const distSquared = dx * dx + dy * dy + dz * dz
 
-                // OPTIMIZED: Skip if outside zone radius or too close
+                // Skip if outside zone radius or too close
                 if (distSquared > this.params.zoneRadiusSquared || distSquared < 0.01) continue
 
                 neighborCount++
 
-                // OPTIMIZED: Use squared distances to avoid sqrt when possible
-                // Separation (only calculate sqrt when needed)
+                // OPTIMIZED: Inline force calculations to avoid function calls
+                // Separation
                 if (distSquared < this.separationDistanceSq) {
                     const distance = Math.sqrt(distSquared)
                     const force = (this.params.separationDistance - distance) / this.params.separationDistance
-                    diff.normalize().multiplyScalar(force * force)
-                    separation.add(diff)
+                    const normalizedForce = force * force / distance
+
+                    separation.x += dx * normalizedForce
+                    separation.y += dy * normalizedForce
+                    separation.z += dz * normalizedForce
                 }
 
-                // Alignment (no sqrt needed)
+                // Alignment
                 if (distSquared < this.alignmentDistanceSq) {
-                    velJ.set(this.velocities[j3], this.velocities[j3 + 1], this.velocities[j3 + 2])
-                    alignment.add(velJ)
+                    alignment.x += this.velocities[j3]
+                    alignment.y += this.velocities[j3 + 1]
+                    alignment.z += this.velocities[j3 + 2]
                 }
 
-                // Cohesion (no sqrt needed)
+                // Cohesion
                 if (distSquared < this.cohesionDistanceSq) {
-                    cohesion.add(posJ)
+                    cohesion.x += positions[j3]
+                    cohesion.y += positions[j3 + 1]
+                    cohesion.z += positions[j3 + 2]
                 }
             }
+
+            this.neighborCounts[i] = neighborCount
 
             // Apply flocking rules
             if (neighborCount > 0) {
@@ -313,13 +360,18 @@ export class FlockingBehavior {
                 this.accelerations[i3 + 2] += diff.z
             }
 
-            // Turbulence
-            this.accelerations[i3] += (Math.random() - 0.5) * this.params.turbulence
-            this.accelerations[i3 + 1] += (Math.random() - 0.5) * this.params.turbulence * 0.7
-            this.accelerations[i3 + 2] += (Math.random() - 0.5) * this.params.turbulence * 0.5
+            // OPTIMIZED: Reduce turbulence calculations
+            if (this.frameCount % 3 === 0) { // Apply turbulence every 3 frames
+                this.accelerations[i3] += (Math.random() - 0.5) * this.params.turbulence
+                this.accelerations[i3 + 1] += (Math.random() - 0.5) * this.params.turbulence * 0.7
+                this.accelerations[i3 + 2] += (Math.random() - 0.5) * this.params.turbulence * 0.5
+            }
         }
 
-        // Update velocities and positions
+        // OPTIMIZED: Update velocities and positions with inline calculations
+        const maxSpeedSq = this.params.maxSpeed * this.params.maxSpeed
+        const speedMult = deltaTime * this.params.speedMultiplier
+
         for (let i = 0; i < this.particleCount; i++) {
             const i3 = i * 3
 
@@ -328,21 +380,23 @@ export class FlockingBehavior {
             this.velocities[i3 + 1] = (this.velocities[i3 + 1] + this.accelerations[i3 + 1]) * this.params.verticalDamping
             this.velocities[i3 + 2] = (this.velocities[i3 + 2] + this.accelerations[i3 + 2]) * this.params.damping
 
-            // Limit speed using pre-allocated vector
-            vel.set(this.velocities[i3], this.velocities[i3 + 1], this.velocities[i3 + 2])
-            const speed = vel.length()
+            // OPTIMIZED: Limit speed using squared comparison when possible
+            const speedSq = this.velocities[i3] * this.velocities[i3] +
+                this.velocities[i3 + 1] * this.velocities[i3 + 1] +
+                this.velocities[i3 + 2] * this.velocities[i3 + 2]
 
-            if (speed > this.params.maxSpeed) {
-                vel.normalize().multiplyScalar(this.params.maxSpeed)
-                this.velocities[i3] = vel.x
-                this.velocities[i3 + 1] = vel.y
-                this.velocities[i3 + 2] = vel.z
+            if (speedSq > maxSpeedSq) {
+                const speed = Math.sqrt(speedSq)
+                const scale = this.params.maxSpeed / speed
+                this.velocities[i3] *= scale
+                this.velocities[i3 + 1] *= scale
+                this.velocities[i3 + 2] *= scale
             }
 
             // Update position
-            positions[i3] += this.velocities[i3] * deltaTime * this.params.speedMultiplier
-            positions[i3 + 1] += this.velocities[i3 + 1] * deltaTime * this.params.speedMultiplier
-            positions[i3 + 2] += this.velocities[i3 + 2] * deltaTime * this.params.speedMultiplier
+            positions[i3] += this.velocities[i3] * speedMult
+            positions[i3 + 1] += this.velocities[i3 + 1] * speedMult
+            positions[i3 + 2] += this.velocities[i3 + 2] * speedMult
         }
     }
 
