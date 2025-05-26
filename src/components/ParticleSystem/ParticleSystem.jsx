@@ -19,7 +19,7 @@ function ParticleSystem({ onShapeForm, targetShape, onDisperse }) {
     const { viewport } = useThree()
 
     // Increased particle count with optimizations
-    const particleCount = 2500 // Doubled from original
+    const particleCount = 2500
     const flocking = useRef(new FlockingBehavior(particleCount))
 
     // Performance monitoring
@@ -42,7 +42,9 @@ function ParticleSystem({ onShapeForm, targetShape, onDisperse }) {
         uSpiralTime: { value: 0 },
         uIsFormed: { value: false },
         isDarkTheme: { value: isDark },
-        uOpacity: { value: 1 }
+        uOpacity: { value: 1 },
+        uInstancedRendering: { value: true },
+        uLODDistance: { value: 50.0 }
     }), [isDark])
 
     // Update theme uniform when it changes
