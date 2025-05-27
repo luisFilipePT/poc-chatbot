@@ -8,6 +8,7 @@ import { ThemeProvider, useTheme } from './contexts/ThemeContext'
 import * as THREE from 'three'
 import Stats from 'stats.js'
 import { useEffect, useRef, useState } from 'react'
+import SystemMonitor from './components/Monitor'
 import './App.css'
 
 function CanvasContent() {
@@ -86,6 +87,7 @@ function CanvasContent() {
             <ShapeText visible={showText} position={textPosition} />
 
             <ThemeToggle />
+            <SystemMonitor />
         </div>
     )
 }
