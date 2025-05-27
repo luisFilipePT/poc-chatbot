@@ -1,29 +1,32 @@
 import { useRef, useMemo, useEffect, forwardRef, useImperativeHandle } from 'react'
 import { useFrame, useThree } from '@react-three/fiber'
 import * as THREE from 'three'
-import { flockingComputeShader } from '../../shaders/flockingCompute'
+import { shapeFormationComputeShader } from '../../shaders/shapeFormationCompute'
 import { particleRenderShader } from '../../shaders/particleRender'
+import { ShapeGeometry } from '../ShapeFormation/ShapeGeometry'
 
-const FlockingFBO = forwardRef(({ particleCount = 2500 }, ref) => {
+const ShapeFormationFBO = forwardRef(({ 
+    particleCount = 2500, 
+    targetShape = null,
+    transitionProgress = 0.0,
+    formationStrength = 1.0
+}, ref) => {
     const meshRef = useRef()
     const timeRef = useRef(0)
+    const targetTextureRef = useRef(null)
     const { gl, viewport, camera } = useThree()
     
-    // Calculate dynamic boundaries based on viewport + 2% buffer
+    // Calculate dynamic boundaries based on viewport
     const boundaries = useMemo(() => {
-        // Get the camera's frustum at a reasonable depth
-        const distance = 10 // Distance from camera where particles exist
-        
-        // Calculate visible area at that distance
-        const vFOV = camera.fov * Math.PI / 180 // Convert to radians
+        const distance = 10
+        const vFOV = camera.fov * Math.PI / 180
         const height = 2 * Math.tan(vFOV / 2) * distance
         const width = height * camera.aspect
         
-        // Add 2% buffer to hide boundaries
         const buffer = 1.02
         const halfWidth = (width * buffer) / 2
         const halfHeight = (height * buffer) / 2
-        const depth = 15 // Reasonable depth for 3D movement
+        const depth = 15
         
         return {
             min: new THREE.Vector3(-halfWidth, -halfHeight, -depth),
@@ -31,40 +34,63 @@ const FlockingFBO = forwardRef(({ particleCount = 2500 }, ref) => {
         }
     }, [camera.fov, camera.aspect])
     
-    // GPU-only flocking system with dynamic boundaries
+    // Load target shape when targetShape changes
+    useEffect(() => {
+        if (targetShape) {
+            const loadTargetShape = async () => {
+                try {
+                    const { positions } = await ShapeGeometry.generateTargetPositions(
+                        particleCount, 
+                        20, 
+                        targetShape
+                    )
+                    
+                    const { texture } = ShapeGeometry.createTargetTexture(positions, particleCount)
+                    targetTextureRef.current = texture
+                    
+                    console.log('Target shape loaded:', targetShape)
+                } catch (error) {
+                    console.error('Failed to load target shape:', error)
+                }
+            }
+            
+            loadTargetShape()
+        }
+    }, [targetShape, particleCount])
+    
+    // GPU-based shape formation system
     const { geometry, computeShader, renderMaterial, renderTargets } = useMemo(() => {
-        // Check WebGL2 support
         if (!gl.capabilities.isWebGL2) {
             console.warn('WebGL2 not supported')
             return { geometry: null, computeShader: null, renderMaterial: null, renderTargets: null }
         }
 
-        // Calculate texture size (square texture to hold all particles)
         const textureSize = Math.ceil(Math.sqrt(particleCount))
         
-        // Create initial data within the dynamic boundaries
-        const initialPositions = new Float32Array(textureSize * textureSize * 4)
-        const velocities = new Float32Array(textureSize * textureSize * 4)
+        // Create initial data within boundaries
+        const initialPositionsData = new Float32Array(textureSize * textureSize * 4)
+        const velocitiesData = new Float32Array(textureSize * textureSize * 4)
         
+        // Fallback to random positions if no initial data provided
         for (let i = 0; i < particleCount; i++) {
             const i4 = i * 4
             
-            // Random positions within dynamic boundaries (80% of available space)
+            // Random positions within boundaries
             const spawnArea = 0.8
-            initialPositions[i4] = (Math.random() - 0.5) * (boundaries.max.x - boundaries.min.x) * spawnArea
-            initialPositions[i4 + 1] = (Math.random() - 0.5) * (boundaries.max.y - boundaries.min.y) * spawnArea
-            initialPositions[i4 + 2] = (Math.random() - 0.5) * (boundaries.max.z - boundaries.min.z) * spawnArea
-            initialPositions[i4 + 3] = 1.0
+            initialPositionsData[i4] = (Math.random() - 0.5) * (boundaries.max.x - boundaries.min.x) * spawnArea
+            initialPositionsData[i4 + 1] = (Math.random() - 0.5) * (boundaries.max.y - boundaries.min.y) * spawnArea
+            initialPositionsData[i4 + 2] = (Math.random() - 0.5) * (boundaries.max.z - boundaries.min.z) * spawnArea
+            initialPositionsData[i4 + 3] = 1.0
             
             // Random velocities
             const speed = 0.5 + Math.random() * 1.0
             const angle = Math.random() * Math.PI * 2
             const elevation = (Math.random() - 0.5) * 0.5
             
-            velocities[i4] = Math.cos(angle) * Math.cos(elevation) * speed
-            velocities[i4 + 1] = Math.sin(elevation) * speed
-            velocities[i4 + 2] = Math.sin(angle) * Math.cos(elevation) * speed
-            velocities[i4 + 3] = 0.0
+            velocitiesData[i4] = Math.cos(angle) * Math.cos(elevation) * speed
+            velocitiesData[i4 + 1] = Math.sin(elevation) * speed
+            velocitiesData[i4 + 2] = Math.sin(angle) * Math.cos(elevation) * speed
+            velocitiesData[i4 + 3] = 0.0
         }
         
         // Create render targets for ping-pong
@@ -98,12 +124,12 @@ const FlockingFBO = forwardRef(({ particleCount = 2500 }, ref) => {
         
         // Initialize textures
         const positionTexture = new THREE.DataTexture(
-            initialPositions, textureSize, textureSize, THREE.RGBAFormat, THREE.FloatType
+            initialPositionsData, textureSize, textureSize, THREE.RGBAFormat, THREE.FloatType
         )
         positionTexture.needsUpdate = true
         
         const velocityTexture = new THREE.DataTexture(
-            velocities, textureSize, textureSize, THREE.RGBAFormat, THREE.FloatType
+            velocitiesData, textureSize, textureSize, THREE.RGBAFormat, THREE.FloatType
         )
         velocityTexture.needsUpdate = true
         
@@ -129,31 +155,40 @@ const FlockingFBO = forwardRef(({ particleCount = 2500 }, ref) => {
         
         gl.setRenderTarget(null)
         
-        // Create unified compute shader with dynamic boundaries
+        // Create empty target texture (will be updated when target shape loads)
+        const emptyTargetData = new Float32Array(textureSize * textureSize * 4)
+        const emptyTargetTexture = new THREE.DataTexture(
+            emptyTargetData, textureSize, textureSize, THREE.RGBAFormat, THREE.FloatType
+        )
+        emptyTargetTexture.needsUpdate = true
+        
+        // Create shape formation compute shader
         const computeShader = new THREE.ShaderMaterial({
             uniforms: {
                 uPositions: { value: rtPosition1.texture },
                 uVelocities: { value: rtVelocity1.texture },
+                uTargetPositions: { value: emptyTargetTexture },
                 uTime: { value: 0 },
                 uDeltaTime: { value: 0 },
                 uParticleCount: { value: particleCount },
                 uTextureSize: { value: textureSize },
-                uPass: { value: 0 }, // 0 = positions, 1 = velocities
+                uPass: { value: 0 },
+                uTransitionProgress: { value: 0.0 },
+                uFormationStrength: { value: 1.0 },
                 uBoundaryMin: { value: boundaries.min },
                 uBoundaryMax: { value: boundaries.max }
             },
-            vertexShader: flockingComputeShader.vertexShader,
-            fragmentShader: flockingComputeShader.fragmentShader
+            vertexShader: shapeFormationComputeShader.vertexShader,
+            fragmentShader: shapeFormationComputeShader.fragmentShader
         })
         
         // Create geometry for particle rendering
         const geometry = new THREE.BufferGeometry()
         const indices = new Float32Array(particleCount)
-        const positions = new Float32Array(particleCount * 3) // Dummy positions for Three.js
+        const positions = new Float32Array(particleCount * 3)
         
         for (let i = 0; i < particleCount; i++) {
             indices[i] = i
-            // Set dummy positions (will be overridden by shader)
             positions[i * 3] = 0
             positions[i * 3 + 1] = 0
             positions[i * 3 + 2] = 0
@@ -162,7 +197,7 @@ const FlockingFBO = forwardRef(({ particleCount = 2500 }, ref) => {
         geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3))
         geometry.setAttribute('aIndex', new THREE.BufferAttribute(indices, 1))
         
-        // Create material that renders particles using imported shaders
+        // Create render material
         const renderMaterial = new THREE.ShaderMaterial({
             uniforms: {
                 uPositions: { value: rtPosition1.texture },
@@ -196,7 +231,14 @@ const FlockingFBO = forwardRef(({ particleCount = 2500 }, ref) => {
         }
     }, [boundaries, computeShader])
 
-    // Update loop - pure GPU computation with dynamic boundaries
+    // Update target texture when it loads
+    useEffect(() => {
+        if (computeShader && targetTextureRef.current) {
+            computeShader.uniforms.uTargetPositions.value = targetTextureRef.current
+        }
+    }, [computeShader, targetTextureRef.current])
+
+    // Update loop - GPU computation with shape formation
     useFrame((state, delta) => {
         if (!meshRef.current || !computeShader || !geometry || !renderTargets) return
         
@@ -206,6 +248,8 @@ const FlockingFBO = forwardRef(({ particleCount = 2500 }, ref) => {
         // Update compute shader uniforms
         computeShader.uniforms.uTime.value = timeRef.current
         computeShader.uniforms.uDeltaTime.value = deltaTime
+        computeShader.uniforms.uTransitionProgress.value = transitionProgress
+        computeShader.uniforms.uFormationStrength.value = formationStrength
         
         // Ping-pong render targets
         const posInput = renderTargets.position.current === 0 ? renderTargets.position.rt1 : renderTargets.position.rt2
@@ -225,19 +269,19 @@ const FlockingFBO = forwardRef(({ particleCount = 2500 }, ref) => {
         scene.add(quad)
         quad.material = computeShader
         
-        // Pass 0: Update positions (forces calculated once here)
+        // Pass 0: Update positions
         computeShader.uniforms.uPass.value = 0
         gl.setRenderTarget(posOutput)
         gl.render(scene, camera)
         
-        // Pass 1: Update velocities (reuses same force calculation)
+        // Pass 1: Update velocities
         computeShader.uniforms.uPass.value = 1
         gl.setRenderTarget(velOutput)
         gl.render(scene, camera)
         
         gl.setRenderTarget(currentRenderTarget)
         
-        // Update render material to use new position texture
+        // Update render material
         renderMaterial.uniforms.uPositions.value = posOutput.texture
         renderMaterial.uniforms.uTime.value = timeRef.current
         
@@ -245,41 +289,6 @@ const FlockingFBO = forwardRef(({ particleCount = 2500 }, ref) => {
         renderTargets.position.current = 1 - renderTargets.position.current
         renderTargets.velocity.current = 1 - renderTargets.velocity.current
     })
-
-    // Expose interface for ParticleSystem
-    useImperativeHandle(ref, () => ({
-        startTransition: () => {
-            // Future: transition to shape formation
-        },
-        endTransition: () => {
-            // Future: transition back to flocking
-        },
-        update: () => {
-            // Future: manual update trigger
-        },
-        getCurrentPositions: () => {
-            if (!renderTargets) return null
-            
-            // Get current position texture
-            const currentPosRT = renderTargets.position.current === 0 ? 
-                renderTargets.position.rt1 : renderTargets.position.rt2
-            
-            // Read texture data (this is expensive, only call when transitioning)
-            const textureSize = Math.ceil(Math.sqrt(particleCount))
-            const buffer = new Float32Array(textureSize * textureSize * 4)
-            
-            // Note: In a real implementation, you'd need to read from GPU
-            // For now, return null to indicate we need a different approach
-            return null
-        },
-        getCurrentVelocities: () => {
-            if (!renderTargets) return null
-            return null // Same as above
-        },
-        getRenderTargets: () => renderTargets, // Expose render targets for direct access
-        velocities: new Float32Array(particleCount * 3),
-        positions: new Float32Array(particleCount * 3)
-    }), [particleCount, renderTargets])
 
     if (!geometry || !computeShader || !renderMaterial) {
         return null
@@ -295,6 +304,6 @@ const FlockingFBO = forwardRef(({ particleCount = 2500 }, ref) => {
     )
 })
 
-FlockingFBO.displayName = 'FlockingFBO'
+ShapeFormationFBO.displayName = 'ShapeFormationFBO'
 
-export default FlockingFBO
+export default ShapeFormationFBO 
