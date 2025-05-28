@@ -1,7 +1,6 @@
 import {useRef, useState, useEffect} from 'react'
 import {useTheme} from '../../contexts/ThemeContext'
-import FlockingFBO from '../FBO/FlockingFBO'
-import ShapeFormationFBO from '../FBO/ShapeFormationFBO'
+import UnifiedParticleFBO from '../FBO/UnifiedParticleFBO'
 // Future imports for other FBO systems:
 // import TransitionFBO from '../FBO/TransitionFBO'
 
@@ -80,21 +79,17 @@ function ParticleSystem({ onShapeForm, targetShape, onDisperse }) {
         }
     }, [targetShape, particleState, onDisperse])
 
-    // Render the appropriate FBO based on current state
-    const renderCurrentFBO = () => {
-        // Always use ShapeFormationFBO - it can handle both flocking and shape formation
-        return (
-            <ShapeFormationFBO 
-                ref={currentFBORef} 
-                particleCount={particleCount}
-                targetShape={targetShape}
-                transitionProgress={transitionProgress}
-                formationStrength={1.0}
-            />
-        )
-    }
-
-    return renderCurrentFBO()
+    // Use unified FBO for all states with smooth transitions
+    return (
+        <UnifiedParticleFBO 
+            ref={currentFBORef} 
+            particleCount={particleCount}
+            mode={particleState}
+            targetShape={targetShape}
+            transitionProgress={transitionProgress}
+            formationStrength={1.0}
+        />
+    )
 }
 
 export default ParticleSystem
