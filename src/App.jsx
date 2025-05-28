@@ -7,7 +7,8 @@ import ShapeText from './components/ShapeText/ShapeText'
 import { ThemeProvider, useTheme } from './contexts/ThemeContext'
 import * as THREE from 'three'
 import Stats from 'stats.js'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, useCallback } from 'react'
+import SystemMonitor from './components/Monitor'
 import './App.css'
 
 function CanvasContent() {
@@ -31,14 +32,14 @@ function CanvasContent() {
         }
     }, [])
 
-    const handleTextShow = (position) => {
+    const handleTextShow = useCallback((position) => {
         setTextPosition(position)
         setShowText(true)
-    }
+    }, [])
 
-    const handleTextHide = () => {
+    const handleTextHide = useCallback(() => {
         setShowText(false)
-    }
+    }, [])
 
     return (
         <div style={{ width: '100%', height: '100%', background: theme.background, position: 'relative' }}>
@@ -86,6 +87,7 @@ function CanvasContent() {
             <ShapeText visible={showText} position={textPosition} />
 
             <ThemeToggle />
+            <SystemMonitor />
         </div>
     )
 }

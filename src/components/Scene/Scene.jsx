@@ -16,19 +16,29 @@ function Scene({ stats, onTextShow, onTextHide }) {
         // Hide text when clicking
         onTextHide()
 
-        // Set the target shape with the click position
-        setTargetShape({
-            position: event.point,
-            timestamp: Date.now()
-        })
+        // Toggle between forming and dispersing
+        if (targetShape) {
+            // If already formed, disperse back to flocking
+            setTargetShape(null)
+        } else {
+            // If flocking, form the circle shape
+            setTargetShape('/circle-test.png')
+        }
     }
 
-    const handleShapeFormed = (position) => {
-        console.log('Shape formed at:', position)
+    const handleShapeFormed = () => {
+        console.log('Shape formed!')
         // Show text after shape forms
         setTimeout(() => {
-            onTextShow(position)
+            onTextShow({ x: 0, y: 0, z: 0 }) // Center position
         }, 500)
+    }
+
+    const handleDisperse = () => {
+        console.log('Shape dispersed!')
+        // Clear the target shape to return to flocking
+        setTargetShape(null)
+        onTextHide()
     }
 
     return (
@@ -47,7 +57,7 @@ function Scene({ stats, onTextShow, onTextHide }) {
             <ParticleSystem
                 onShapeForm={handleShapeFormed}
                 targetShape={targetShape}
-                onDisperse={onTextHide}
+                onDisperse={handleDisperse}
             />
         </>
     )
