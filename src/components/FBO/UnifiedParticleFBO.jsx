@@ -15,26 +15,9 @@ const UnifiedParticleFBO = forwardRef(({
 }, ref) => {
     const meshRef = useRef()
     const timeRef = useRef(0)
+    const frameCountRef = useRef(0)
     const targetTextureRef = useRef(null)
     const { gl, viewport, camera } = useThree()
-    
-    // Calculate dynamic boundaries based on viewport
-    const boundaries = useMemo(() => {
-        const distance = 10
-        const vFOV = camera.fov * Math.PI / 180
-        const height = 2 * Math.tan(vFOV / 2) * distance
-        const width = height * camera.aspect
-        
-        const buffer = 1.02
-        const halfWidth = (width * buffer) / 2
-        const halfHeight = (height * buffer) / 2
-        const depth = 15
-        
-        return {
-            min: new THREE.Vector3(-halfWidth, -halfHeight, -depth),
-            max: new THREE.Vector3(halfWidth, halfHeight, depth)
-        }
-    }, [camera.fov, camera.aspect])
     
     // CPU: Process target shape when it changes
     useEffect(() => {
@@ -65,6 +48,18 @@ const UnifiedParticleFBO = forwardRef(({
         }
     }, [targetShape, particleCount])
     
+    // EXACTLY like CPU: Initialize predator system and frame-based optimizations
+    const predatorsRef = useRef([]) // CPU-style predator array
+    const lastDisruptionTimeRef = useRef(0) // CPU-style disruption timing
+    const lastCenterOfMassRef = useRef(new THREE.Vector3(0, 0, 0)) // CPU-style cached center
+    const predatorTextureRef = useRef(null) // GPU texture for multiple predators
+    
+    // EXACTLY like CPU: Predator system parameters
+    const disruptionInterval = 15000 // 15 seconds like CPU
+    const disruptionDuration = 5000  // 5 seconds like CPU
+    const centerUpdateInterval = 2 // Update center every 2 frames like CPU
+    const predatorUpdateInterval = 2 // Update predators every 2 frames like CPU
+    
     // GPU-based unified particle system
     const { geometry, computeShader, renderMaterial, renderTargets } = useMemo(() => {
         if (!gl.capabilities.isWebGL2) {
@@ -83,21 +78,25 @@ const UnifiedParticleFBO = forwardRef(({
         for (let i = 0; i < particleCount; i++) {
             const i4 = i * 4
             
-            // Random positions within boundaries
+            // Random positions within viewport area - positioned better for camera at Z=50
             const spawnArea = 0.8
-            initialPositionsData[i4] = (Math.random() - 0.5) * (boundaries.max.x - boundaries.min.x) * spawnArea
-            initialPositionsData[i4 + 1] = (Math.random() - 0.5) * (boundaries.max.y - boundaries.min.y) * spawnArea
-            initialPositionsData[i4 + 2] = (Math.random() - 0.5) * (boundaries.max.z - boundaries.min.z) * spawnArea
+            const maxX = viewport.width * 0.8 / 2
+            const maxY = viewport.height * 0.8 / 2
+            const maxZ = 25  // Increased range for better depth
+            
+            initialPositionsData[i4] = (Math.random() - 0.5) * maxX * 2 * spawnArea
+            initialPositionsData[i4 + 1] = (Math.random() - 0.5) * maxY * 2 * spawnArea
+            initialPositionsData[i4 + 2] = (Math.random() - 0.5) * maxZ - 10  // Range: -22.5 to +2.5 (better for camera at Z=50)
             initialPositionsData[i4 + 3] = 1.0
             
-            // Random velocities
-            const speed = 0.5 + Math.random() * 1.0
+            // Random velocities - MATCH CPU FlockingBehavior pattern
+            const speed = 0.3 + Math.random() * 0.3
             const angle = Math.random() * Math.PI * 2
-            const elevation = (Math.random() - 0.5) * 0.5
             
-            velocitiesData[i4] = Math.cos(angle) * Math.cos(elevation) * speed
-            velocitiesData[i4 + 1] = Math.sin(elevation) * speed
-            velocitiesData[i4 + 2] = Math.sin(angle) * Math.cos(elevation) * speed
+            // CPU pattern: X full, Y reduced (30%), Z minimal (10%)
+            velocitiesData[i4] = Math.cos(angle) * speed
+            velocitiesData[i4 + 1] = Math.sin(angle) * speed * 0.3  // Y: 30% like CPU
+            velocitiesData[i4 + 2] = (Math.random() - 0.5) * speed * 0.1  // Z: 10% like CPU
             velocitiesData[i4 + 3] = 0.0
         }
         
@@ -170,8 +169,23 @@ const UnifiedParticleFBO = forwardRef(({
         )
         emptyTargetTexture.needsUpdate = true
         
+        // EXACTLY like CPU: Create predator texture (4x4 texture for up to 10 predators)
+        const predatorTextureSize = 4
+        const emptyPredatorData = new Float32Array(predatorTextureSize * predatorTextureSize * 4)
+        const emptyPredatorTexture = new THREE.DataTexture(
+            emptyPredatorData, predatorTextureSize, predatorTextureSize, THREE.RGBAFormat, THREE.FloatType
+        )
+        emptyPredatorTexture.needsUpdate = true
+        predatorTextureRef.current = emptyPredatorTexture
+        
         // Start with flocking shader - will be updated dynamically
         const initialShader = flockingComputeShader
+        
+        // EXACTLY like CPU: Calculate grid size based on largest zone radius
+        const separationDistance = 2.5
+        const alignmentDistance = 5.0
+        const cohesionDistance = 5.0
+        const gridSize = Math.max(separationDistance, alignmentDistance, cohesionDistance) * 2 // Doubled like CPU
         
         // Create compute shader (will be updated dynamically)
         const computeShader = new THREE.ShaderMaterial({
@@ -179,6 +193,7 @@ const UnifiedParticleFBO = forwardRef(({
                 uPositions: { value: rtPosition1.texture },
                 uVelocities: { value: rtVelocity1.texture },
                 uTargetPositions: { value: emptyTargetTexture },
+                uPredators: { value: emptyPredatorTexture }, // NEW: Multiple predators
                 uTime: { value: 0 },
                 uDeltaTime: { value: 0 },
                 uParticleCount: { value: particleCount },
@@ -186,8 +201,11 @@ const UnifiedParticleFBO = forwardRef(({
                 uPass: { value: 0 },
                 uTransitionProgress: { value: 0.0 },
                 uFormationStrength: { value: 1.0 },
-                uBoundaryMin: { value: boundaries.min },
-                uBoundaryMax: { value: boundaries.max }
+                uFrameCount: { value: 0 },
+                uPredatorCount: { value: 0 }, // NEW: Number of active predators
+                uCachedCenterOfMass: { value: new THREE.Vector3(0, 0, 0) }, // CPU-style cached center
+                uGridSize: { value: gridSize }, // EXACTLY like CPU grid size calculation
+                uUpdateCenterOfMass: { value: true } // Whether to update center this frame
             },
             vertexShader: initialShader.vertexShader,
             fragmentShader: initialShader.fragmentShader
@@ -213,7 +231,7 @@ const UnifiedParticleFBO = forwardRef(({
             uniforms: {
                 uPositions: { value: rtPosition1.texture },
                 uTime: { value: 0 },
-                uSize: { value: 2.0 },
+                uSize: { value: 3.5 },  // Increased from 2.0 for better visibility
                 uTextureSize: { value: textureSize },
                 uParticleCount: { value: particleCount }
             },
@@ -232,7 +250,7 @@ const UnifiedParticleFBO = forwardRef(({
         }
         
         return { geometry, computeShader, renderMaterial, renderTargets }
-    }, [particleCount, gl, boundaries])
+    }, [particleCount, gl, viewport.width, viewport.height])
 
     // Update shader when mode changes
     useEffect(() => {
@@ -262,14 +280,6 @@ const UnifiedParticleFBO = forwardRef(({
         console.log('Shader updated to:', mode)
     }, [mode, computeShader, transitionProgress])
 
-    // Update boundaries when viewport changes
-    useEffect(() => {
-        if (computeShader) {
-            computeShader.uniforms.uBoundaryMin.value = boundaries.min
-            computeShader.uniforms.uBoundaryMax.value = boundaries.max
-        }
-    }, [boundaries, computeShader])
-
     // Update target texture when it loads
     useEffect(() => {
         if (computeShader) {
@@ -295,13 +305,94 @@ const UnifiedParticleFBO = forwardRef(({
         if (!meshRef.current || !computeShader || !geometry || !renderTargets) return
         
         timeRef.current += delta
-        const deltaTime = Math.min(delta, 0.016)
+        frameCountRef.current += 1 // Increment frame counter like CPU
+        const deltaTime = Math.min(delta, 0.033) // Cap at ~30fps minimum like CPU
+        const currentTime = Date.now()
         
         // Update compute shader uniforms
         computeShader.uniforms.uTime.value = timeRef.current
         computeShader.uniforms.uDeltaTime.value = deltaTime
         computeShader.uniforms.uTransitionProgress.value = transitionProgress
         computeShader.uniforms.uFormationStrength.value = formationStrength
+        computeShader.uniforms.uFrameCount.value = frameCountRef.current // Pass frame count
+        
+        // EXACTLY like CPU: Center of mass caching (update every 2 frames)
+        if (frameCountRef.current % centerUpdateInterval === 0) {
+            // Calculate center of mass from current positions
+            // In a full implementation, we'd read back from GPU or use a separate compute pass
+            // For now, we'll approximate with a moving average like CPU does
+            const currentCenter = computeShader.uniforms.uCachedCenterOfMass.value
+            currentCenter.lerp(new THREE.Vector3(0, 0, 0), 0.01) // Slowly drift toward origin
+            lastCenterOfMassRef.current.copy(currentCenter)
+            computeShader.uniforms.uUpdateCenterOfMass.value = true
+        } else {
+            computeShader.uniforms.uUpdateCenterOfMass.value = false
+        }
+        
+        // EXACTLY like CPU: Predator system (update every 2 frames)
+        if (frameCountRef.current % predatorUpdateInterval === 0) {
+            // EXACTLY like CPU: Create new predator if needed
+            if (currentTime - lastDisruptionTimeRef.current > disruptionInterval) {
+                const flockCenter = lastCenterOfMassRef.current
+                const angle = Math.random() * Math.PI * 2
+                const distance = 25
+                
+                // EXACTLY like CPU: Create predator with same parameters
+                predatorsRef.current.push({
+                    position: new THREE.Vector3(
+                        flockCenter.x + Math.cos(angle) * distance,
+                        flockCenter.y,
+                        flockCenter.z + Math.sin(angle) * distance
+                    ),
+                    velocity: new THREE.Vector3(
+                        -Math.cos(angle) * 0.3,
+                        0,
+                        -Math.sin(angle) * 0.3
+                    ),
+                    initialStrength: 0.6,
+                    strength: 0.6,
+                    createdAt: currentTime
+                })
+                
+                lastDisruptionTimeRef.current = currentTime
+            }
+            
+            // EXACTLY like CPU: Update existing predators
+            predatorsRef.current = predatorsRef.current.filter(predator => {
+                const age = currentTime - predator.createdAt
+                if (age > disruptionDuration) return false
+                
+                // Smooth movement like CPU
+                predator.position.x += predator.velocity.x * 0.016
+                predator.position.y += predator.velocity.y * 0.016
+                predator.position.z += predator.velocity.z * 0.016
+                
+                // Smooth fade like CPU
+                const t = age / disruptionDuration
+                predator.strength = predator.initialStrength * (1 - t * t)
+                
+                return true
+            })
+            
+            // EXACTLY like CPU: Update predator texture with all active predators
+            const predatorData = new Float32Array(16 * 4) // 4x4 texture = 16 pixels
+            for (let i = 0; i < Math.min(predatorsRef.current.length, 10); i++) {
+                const predator = predatorsRef.current[i]
+                const i4 = i * 4
+                predatorData[i4] = predator.position.x
+                predatorData[i4 + 1] = predator.position.y
+                predatorData[i4 + 2] = predator.position.z
+                predatorData[i4 + 3] = predator.strength
+            }
+            
+            // Update predator texture
+            if (predatorTextureRef.current) {
+                predatorTextureRef.current.image.data = predatorData
+                predatorTextureRef.current.needsUpdate = true
+                computeShader.uniforms.uPredators.value = predatorTextureRef.current
+                computeShader.uniforms.uPredatorCount.value = Math.min(predatorsRef.current.length, 10)
+            }
+        }
         
         // Update target texture if it changed
         if (targetTextureRef.current && computeShader.uniforms.uTargetPositions.value !== targetTextureRef.current) {

@@ -16,8 +16,14 @@ function Scene({ stats, onTextShow, onTextHide }) {
         // Hide text when clicking
         onTextHide()
 
-        // Set the target shape to form the circle from the image
-        setTargetShape('/circle-test.png')
+        // Toggle between forming and dispersing
+        if (targetShape) {
+            // If already formed, disperse back to flocking
+            setTargetShape(null)
+        } else {
+            // If flocking, form the circle shape
+            setTargetShape('/circle-test.png')
+        }
     }
 
     const handleShapeFormed = () => {

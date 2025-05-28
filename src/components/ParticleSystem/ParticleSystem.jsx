@@ -9,8 +9,16 @@ function ParticleSystem({ onShapeForm, targetShape, onDisperse }) {
     const [isTransitioning, setIsTransitioning] = useState(false)
     const [transitionProgress, setTransitionProgress] = useState(0.0)
     const currentFBORef = useRef()
+    const onShapeFormRef = useRef(onShapeForm)
+    const onDisperseRef = useRef(onDisperse)
     const { theme, isDark } = useTheme()
     const particleCount = 2500
+
+    // Keep refs updated with latest callbacks
+    useEffect(() => {
+        onShapeFormRef.current = onShapeForm
+        onDisperseRef.current = onDisperse
+    }, [onShapeForm, onDisperse])
 
     // Handle shape formation state transitions
     useEffect(() => {
@@ -35,15 +43,15 @@ function ParticleSystem({ onShapeForm, targetShape, onDisperse }) {
                 } else {
                     setParticleState('formed')
                     setIsTransitioning(false)
-                    if (onShapeForm) {
-                        onShapeForm()
+                    if (onShapeFormRef.current) {
+                        onShapeFormRef.current()
                     }
                 }
             }
             
             requestAnimationFrame(animateTransition)
         }
-    }, [targetShape, particleState, onShapeForm])
+    }, [targetShape, particleState])
 
     // Handle disperse state transitions
     useEffect(() => {
@@ -53,7 +61,7 @@ function ParticleSystem({ onShapeForm, targetShape, onDisperse }) {
             
             // Animate transition progress from 1 to 0
             const startTime = Date.now()
-            const duration = 2000 // 2 seconds
+            const duration = 1000 // 2 seconds
             
             const animateDispersion = () => {
                 const elapsed = Date.now() - startTime
@@ -69,15 +77,15 @@ function ParticleSystem({ onShapeForm, targetShape, onDisperse }) {
                     setParticleState('flocking')
                     setIsTransitioning(false)
                     setTransitionProgress(0.0)
-                    if (onDisperse) {
-                        onDisperse()
+                    if (onDisperseRef.current) {
+                        onDisperseRef.current()
                     }
                 }
             }
             
             requestAnimationFrame(animateDispersion)
         }
-    }, [targetShape, particleState, onDisperse])
+    }, [targetShape, particleState])
 
     // Use unified FBO for all states with smooth transitions
     return (
